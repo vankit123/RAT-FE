@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI Variable", "Bahnschrift", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(61, 139, 231, 0.2), transparent 22%),
+    radial-gradient(circle at top right, rgba(125, 193, 255, 0.18), transparent 28%),
+    linear-gradient(135deg, #f3f8ff 0%, #e8f1fb 48%, #edf4fb 100%);
+}
