@@ -15,7 +15,7 @@ const apiConfig: ApiRuntimeConfig = {
     : '',
   backendBaseUrl: window.__RAT_API_CONFIG__?.backendBaseUrl
     ? String(window.__RAT_API_CONFIG__.backendBaseUrl).replace(/\/+$/, '')
-    : 'http://localhost:8080/api',
+    : 'http://localhost:8083/api',
 };
 
 function joinApiUrl(baseUrl: string, endpoint: string): string {

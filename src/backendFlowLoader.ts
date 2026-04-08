@@ -48,7 +48,7 @@ interface TestCaseDataSetResponse {
   testDataSetId: number;
 }
 
-const DEFAULT_BACKEND_BASE_URL = 'http://localhost:8080/api';
+const DEFAULT_BACKEND_BASE_URL = 'http://localhost:8083/api';
 
 function normalizeExternalPaymentConfig(dataJson: Record<string, unknown> | null | undefined): ExternalPaymentConfig | null {
   const payment = dataJson?.payment;

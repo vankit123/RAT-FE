@@ -175,7 +175,7 @@ export function App() {
       selectedProject
         ? testCases.filter(
             (testCase) => testCase.projectId === selectedProject.id,
-          )
+          ).sort((left, right) => left.id - right.id)
         : [],
     [selectedProject, testCases],
   );

@@ -10,7 +10,7 @@ import { FlowDefinition, FlowRunSummary } from './types';
 
 const host = process.env.DASHBOARD_HOST || '127.0.0.1';
 const port = Number(process.env.DASHBOARD_PORT || 3000);
-const backendBaseUrl = (process.env.RAT_BE_BASE_URL || 'http://localhost:8080/api').replace(/\/+$/, '');
+const backendBaseUrl = (process.env.RAT_BE_BASE_URL || 'http://localhost:8083/api').replace(/\/+$/, '');
 const clientDistDir = path.join(__dirname, 'client');
 const artifactsDir = path.join(process.cwd(), 'dashboard', 'artifacts');
 
@@ -61,7 +61,7 @@ function renderIndexHtml(filePath: string): string {
     JSON.stringify(process.env.DASHBOARD_API_BASE_URL || '')
   ).replace(
     "'__RAT_BE_BASE_URL__'",
-    JSON.stringify(process.env.RAT_BE_BASE_URL || 'http://localhost:8080/api')
+    JSON.stringify(process.env.RAT_BE_BASE_URL || 'http://localhost:8083/api')
   );
 }
 

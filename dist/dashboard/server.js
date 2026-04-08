@@ -13,7 +13,7 @@ const templateLibrary_1 = require("./templateLibrary");
 const backendFlowLoader_1 = require("../src/backendFlowLoader");
 const host = process.env.DASHBOARD_HOST || '127.0.0.1';
 const port = Number(process.env.DASHBOARD_PORT || 3000);
-const backendBaseUrl = (process.env.RAT_BE_BASE_URL || 'http://localhost:8080/api').replace(/\/+$/, '');
+const backendBaseUrl = (process.env.RAT_BE_BASE_URL || 'http://localhost:8083/api').replace(/\/+$/, '');
 const clientDistDir = path_1.default.join(__dirname, 'client');
 const artifactsDir = path_1.default.join(process.cwd(), 'dashboard', 'artifacts');
 const contentTypes = {
@@ -53,7 +53,7 @@ function sendHtml(response, html) {
 }
 function renderIndexHtml(filePath) {
     const html = fs_1.default.readFileSync(filePath, 'utf8');
-    return html.replace("'__DASHBOARD_API_BASE_URL__'", JSON.stringify(process.env.DASHBOARD_API_BASE_URL || '')).replace("'__RAT_BE_BASE_URL__'", JSON.stringify(process.env.RAT_BE_BASE_URL || 'http://localhost:8080/api'));
+    return html.replace("'__DASHBOARD_API_BASE_URL__'", JSON.stringify(process.env.DASHBOARD_API_BASE_URL || '')).replace("'__RAT_BE_BASE_URL__'", JSON.stringify(process.env.RAT_BE_BASE_URL || 'http://localhost:8083/api'));
 }
 function streamFile(response, filePath) {
     const extension = path_1.default.extname(filePath).toLowerCase();

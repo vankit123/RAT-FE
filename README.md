@@ -22,12 +22,12 @@ Project này chịu trách nhiệm:
 - Mặc định:
   - Dashboard server: `http://127.0.0.1:3000`
   - Vite dev client: `http://127.0.0.1:3001`
-  - Backend API: `http://localhost:8080/api`
+  - Backend API: `http://localhost:8083/api`
 
 Có thể đổi backend bằng biến môi trường:
 
 ```powershell
-$env:RAT_BE_BASE_URL='http://localhost:8080/api'
+$env:RAT_BE_BASE_URL='http://localhost:8083/api'
 ```
 
 ## Cài đặt và chạy
@@ -44,8 +44,6 @@ http://127.0.0.1:3000
 ```
 
 Nếu đang phát triển UI React và cần hot reload:
-
-
 
 Lưu ý:
 
@@ -193,9 +191,6 @@ Khi flow chạm VNPAY sandbox:
    - runner tiếp tục các bước sau thanh toán
    - sau đó mới đánh giá pass/fail
 
-
-
-
 ### Nếu thanh toán xong nhưng runner vẫn cố fill lại field VNPAY
 
 Ví dụ lỗi như:
@@ -214,12 +209,12 @@ Could not find element for "[name=\"paymethod\"]"
 ;; - vào `Sửa`
 ;; - `Edit dataStep`
 ;; - tìm các step thuộc VNPAY như:
-;;   - chọn phương thức thanh toán
-;;   - số thẻ
-;;   - chủ thẻ
-;;   - ngày phát hành
-;;   - OTP
-;;   - nút tiếp tục / thanh toán
+;; - chọn phương thức thanh toán
+;; - số thẻ
+;; - chủ thẻ
+;; - ngày phát hành
+;; - OTP
+;; - nút tiếp tục / thanh toán
 ;; - xóa các step đó nếu flow đang dùng manual VNPAY
 
 ;; Giữ lại:
@@ -227,8 +222,6 @@ Could not find element for "[name=\"paymethod\"]"
 ;; - step trước khi sang payment
 ;; - step chờ redirect/gateway
 ;; - các step sau khi đã quay lại hệ thống
-
-
 
 ## Các action runtime thường dùng
 

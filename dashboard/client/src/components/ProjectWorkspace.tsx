@@ -132,6 +132,8 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
     const form = event.currentTarget;
     const data = new FormData(form);
     const stepsForCurrentTestCase = getStepsForTestCase(testCase.id);
+    const infoExpanded = testCaseInfoExpanded(testCase.id);
+    const dataSetSectionExpanded = dataSetsExpanded(testCase.id);
     setSubmitting(true);
     try {
       const dataSetUpdates = getAttachedDataSets(testCase.id).map((dataSet) => {
@@ -142,16 +144,32 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
           id: dataSet.id,
           payload: {
             projectId: project.id,
-            code: String(data.get(`dataSetCode-${dataSet.id}`) || '').trim(),
-            name: String(data.get(`dataSetName-${dataSet.id}`) || '').trim(),
-            description: String(data.get(`dataSetDescription-${dataSet.id}`) || '').trim(),
-            dataJson: dataJsonMode(dataKey) === 'json'
-              ? dataSetJson ? JSON.parse(dataSetJson) as Record<string, unknown> : {}
-              : buildDataJson(data, `dataSet-${dataSet.id}`, dataSet.dataJson),
-            expectedJson: expectedJsonMode(dataKey) === 'json'
-              ? expectedJson ? JSON.parse(expectedJson) as Record<string, unknown> : {}
-              : buildExpectedJson(data, `expected-${dataSet.id}`),
-            status: String(data.get(`dataSetStatus-${dataSet.id}`) || '').trim(),
+            code: dataSetSectionExpanded && data.has(`dataSetCode-${dataSet.id}`)
+              ? String(data.get(`dataSetCode-${dataSet.id}`) || '').trim()
+              : dataSet.code,
+            name: dataSetSectionExpanded && data.has(`dataSetName-${dataSet.id}`)
+              ? String(data.get(`dataSetName-${dataSet.id}`) || '').trim()
+              : dataSet.name,
+            description: dataSetSectionExpanded && data.has(`dataSetDescription-${dataSet.id}`)
+              ? String(data.get(`dataSetDescription-${dataSet.id}`) || '').trim()
+              : (dataSet.description || ''),
+            dataJson: !dataSetSectionExpanded
+              ? ((dataSet.dataJson && typeof dataSet.dataJson === 'object') ? dataSet.dataJson as Record<string, unknown> : {})
+              : dataJsonMode(dataKey) === 'json'
+                ? (data.has(`dataJson-${dataSet.id}`)
+                  ? (dataSetJson ? JSON.parse(dataSetJson) as Record<string, unknown> : {})
+                  : ((dataSet.dataJson && typeof dataSet.dataJson === 'object') ? dataSet.dataJson as Record<string, unknown> : {}))
+                : buildDataJson(data, `dataSet-${dataSet.id}`, dataSet.dataJson),
+            expectedJson: !dataSetSectionExpanded
+              ? (((dataSet.expectedJson || {}) && typeof (dataSet.expectedJson || {}) === 'object') ? ((dataSet.expectedJson || {}) as Record<string, unknown>) : {})
+              : expectedJsonMode(dataKey) === 'json'
+                ? (data.has(`expectedJson-${dataSet.id}`)
+                  ? (expectedJson ? JSON.parse(expectedJson) as Record<string, unknown> : {})
+                  : (((dataSet.expectedJson || {}) && typeof (dataSet.expectedJson || {}) === 'object') ? ((dataSet.expectedJson || {}) as Record<string, unknown>) : {}))
+                : buildExpectedJson(data, `expected-${dataSet.id}`, dataSet.expectedJson),
+            status: dataSetSectionExpanded && data.has(`dataSetStatus-${dataSet.id}`)
+              ? String(data.get(`dataSetStatus-${dataSet.id}`) || '').trim()
+              : (dataSet.status || 'active'),
           },
         };
       });
@@ -170,7 +188,7 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
           : buildDataJson(data, 'newData', recordedTemplateDataJson),
         expectedJson: expectedJsonMode(newKey) === 'json'
           ? newExpectedJson ? JSON.parse(newExpectedJson) as Record<string, unknown> : {}
-          : buildExpectedJson(data, 'newExpected'),
+          : buildExpectedJson(data, 'newExpected', {}),
         status: String(data.get('newDataSetStatus') || '').trim() || 'active',
       } : undefined;
       const stepUpdates = expandedStepsForTestCaseId === testCase.id
@@ -241,11 +259,11 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
 
       await onUpdateTestCase(testCase, {
         projectId: project.id,
-        code: String(data.get('code') || '').trim(),
-        name: String(data.get('name') || '').trim(),
-        description: String(data.get('description') || '').trim(),
-        type: String(data.get('type') || '').trim(),
-        status: String(data.get('status') || '').trim(),
+        code: infoExpanded && data.has('code') ? String(data.get('code') || '').trim() : testCase.code,
+        name: infoExpanded && data.has('name') ? String(data.get('name') || '').trim() : testCase.name,
+        description: infoExpanded && data.has('description') ? String(data.get('description') || '').trim() : (testCase.description || ''),
+        type: infoExpanded && data.has('type') ? String(data.get('type') || '').trim() : (testCase.type || 'login'),
+        status: infoExpanded && data.has('status') ? String(data.get('status') || '').trim() : (testCase.status || 'active'),
       }, dataSetUpdates, finalStepUpdates, newDataSet, newStep || autoExpectedStep);
       setEditingTestCaseId(null);
       setAddingDataSetForTestCaseId(null);
@@ -508,6 +526,26 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
   }
 
   function buildDataJson(data: FormData, prefix: string, currentDataJson: unknown): Record<string, unknown> {
+    const hasRecordedFields = recordedDataEntries(currentDataJson).some((entry) =>
+      data.has(`${prefix}Recorded-${entry.key}-Target`) || data.has(`${prefix}Recorded-${entry.key}-Value`)
+    );
+    const hasLoginFields = data.has(`${prefix}Username`) || data.has(`${prefix}Password`);
+    const hasVnpayFields =
+      data.has(`${prefix}VnpayMode`) ||
+      data.has(`${prefix}VnpayBankText`) ||
+      data.has(`${prefix}VnpayBankSelector`) ||
+      data.has(`${prefix}VnpayCardNumber`) ||
+      data.has(`${prefix}VnpayCardHolderName`) ||
+      data.has(`${prefix}VnpayIssueDate`) ||
+      data.has(`${prefix}VnpayOtp`) ||
+      data.has(`${prefix}VnpayReturnUrl`);
+
+    if (!hasRecordedFields && !hasLoginFields && !hasVnpayFields) {
+      return (currentDataJson && typeof currentDataJson === 'object')
+        ? currentDataJson as Record<string, unknown>
+        : {};
+    }
+
     const recordedEntries = recordedDataEntries(currentDataJson);
     const baseDataJson = !recordedEntries.length ? buildLoginDataJson(data, prefix) : {
       recorded: Object.fromEntries(recordedEntries.map((entry) => [
@@ -522,7 +560,19 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
     return withVnpayConfig(baseDataJson, data, prefix, currentDataJson);
   }
 
-  function buildExpectedJson(data: FormData, prefix: string): Record<string, unknown> {
+  function buildExpectedJson(data: FormData, prefix: string, currentExpectedJson?: unknown): Record<string, unknown> {
+    const hasExpectedFields =
+      data.has(`${prefix}SelectorKind`) ||
+      data.has(`${prefix}SelectorValue`) ||
+      data.has(`${prefix}Value`) ||
+      data.has(`${prefix}Url`);
+
+    if (!hasExpectedFields) {
+      return (currentExpectedJson && typeof currentExpectedJson === 'object')
+        ? currentExpectedJson as Record<string, unknown>
+        : {};
+    }
+
     const selectorKind = String(data.get(`${prefix}SelectorKind`) || 'css');
     const selectorValue = String(data.get(`${prefix}SelectorValue`) || '').trim();
     const result: Record<string, string> = {

@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.loadBackendTestCaseFlow = loadBackendTestCaseFlow;
 exports.loadBackendTestCaseFlows = loadBackendTestCaseFlows;
-const DEFAULT_BACKEND_BASE_URL = 'http://localhost:8080/api';
+const DEFAULT_BACKEND_BASE_URL = 'http://localhost:8083/api';
 function normalizeExternalPaymentConfig(dataJson) {
     const payment = dataJson?.payment;
     if (!payment || typeof payment !== 'object')
