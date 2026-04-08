@@ -6,13 +6,22 @@ function formatSelector(kind: LoginTemplateInput['successSelectorKind'], value: 
   return kind === 'auto' ? trimmedValue : `kind=${kind}::${trimmedValue}`;
 }
 
+function isLikelyUrlOrPath(value: string): boolean {
+  const trimmedValue = value.trim();
+  return /^https?:\/\//i.test(trimmedValue) || trimmedValue.startsWith('/');
+}
+
 export async function createLoginFunctionalTest(
   project: Project,
   testCasePayload: Omit<TestCaseRequest, 'projectId' | 'type' | 'status'>,
   input: LoginTemplateInput
 ): Promise<TestCase> {
-  const successTarget = formatSelector(input.successSelectorKind, input.successSelector);
+  const rawSuccessTarget = input.successSelector.trim();
   const submitTarget = formatSelector(input.submitSelectorKind, input.submitSelector);
+  const successUrl = String(input.successUrl || '').trim()
+    || (input.successSelectorKind === 'link' && isLikelyUrlOrPath(rawSuccessTarget) ? rawSuccessTarget : '');
+  const shouldAssertVisible = Boolean(rawSuccessTarget) && !(input.successSelectorKind === 'link' && isLikelyUrlOrPath(rawSuccessTarget));
+  const successTarget = shouldAssertVisible ? formatSelector(input.successSelectorKind, rawSuccessTarget) : '';
   const testCase = await createTestCase({
     ...testCasePayload,
     projectId: project.id,
@@ -53,15 +62,29 @@ export async function createLoginFunctionalTest(
       expectedValue: null,
       description: 'Click nút đăng nhập',
     },
-    {
-      stepOrder: 5,
+  ];
+
+  if (shouldAssertVisible) {
+    steps.push({
+      stepOrder: steps.length + 1,
       actionType: 'assertVisible',
       target: '${expected.result.selector}',
       value: null,
       expectedValue: '${expected.result.value}',
       description: 'Kiểm tra dashboard hiển thị',
-    },
-  ];
+    });
+  }
+
+  if (successUrl) {
+    steps.push({
+      stepOrder: steps.length + 1,
+      actionType: 'assertUrlContains',
+      target: null,
+      value: '${expected.result.url}',
+      expectedValue: '${expected.result.url}',
+      description: 'Kiểm tra URL sau khi đăng nhập',
+    });
+  }
 
   await Promise.all(steps.map((step) => createTestCaseStep({ ...step, testCaseId: testCase.id })));
 
@@ -78,8 +101,9 @@ export async function createLoginFunctionalTest(
     },
     expectedJson: {
       result: {
-        selector: successTarget,
+        ...(successTarget ? { selector: successTarget } : {}),
         value: 'visible',
+        ...(successUrl ? { url: successUrl } : {}),
       },
     },
     status: 'active',

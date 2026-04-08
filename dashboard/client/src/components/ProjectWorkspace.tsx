@@ -81,6 +81,7 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
         submitSelector: String(data.get('submitSelector') || '').trim(),
         successSelectorKind: String(data.get('successSelectorKind') || 'css') as LoginTemplateInput['successSelectorKind'],
         successSelector: String(data.get('successSelector') || '').trim(),
+        successUrl: String(data.get('successUrl') || '').trim(),
         username: String(data.get('username') || '').trim(),
         password: String(data.get('password') || '').trim(),
       });
@@ -225,27 +226,71 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
         : undefined;
       const expectedJsonForAutoStep = findExpectedJsonForAutoStep(dataSetUpdates, newDataSet);
       const existingPassConditionStep = findPassConditionStep(stepsForCurrentTestCase);
+      const existingVisiblePassStep = findVisiblePassConditionStep(stepsForCurrentTestCase);
+      const existingUrlPassStep = findUrlPassConditionStep(stepsForCurrentTestCase);
       const maxStepOrder = Math.max(0, ...stepsForCurrentTestCase.map((step) => Number(step.stepOrder) || 0));
-      const expectedStepOrder = existingPassConditionStep && existingPassConditionStep.stepOrder >= maxStepOrder
-        ? existingPassConditionStep.stepOrder
+      const visibleExpectedStepOrder = existingVisiblePassStep && existingVisiblePassStep.stepOrder >= maxStepOrder
+        ? existingVisiblePassStep.stepOrder
         : maxStepOrder + 1;
-      const shouldSyncExpectedStep = Boolean(nestedString(expectedJsonForAutoStep, 'result.selector')) && expandedStepsForTestCaseId !== testCase.id;
-      const autoExpectedStepUpdate = shouldSyncExpectedStep && existingPassConditionStep
+      const urlExpectedStepOrder = existingUrlPassStep && existingUrlPassStep.stepOrder >= maxStepOrder
+        ? existingUrlPassStep.stepOrder
+        : maxStepOrder + (existingVisiblePassStep ? 1 : 2);
+      const shouldSyncVisibleExpectedStep = Boolean(nestedString(expectedJsonForAutoStep, 'result.selector')) && expandedStepsForTestCaseId !== testCase.id;
+      const shouldSyncUrlExpectedStep = Boolean(nestedString(expectedJsonForAutoStep, 'result.url')) && expandedStepsForTestCaseId !== testCase.id;
+      const shouldConvertVisibleStepToUrlStep =
+        !shouldSyncVisibleExpectedStep &&
+        shouldSyncUrlExpectedStep &&
+        Boolean(existingVisiblePassStep) &&
+        (!existingUrlPassStep || existingVisiblePassStep?.id !== existingUrlPassStep.id);
+      const autoExpectedStepUpdate = shouldSyncVisibleExpectedStep && existingVisiblePassStep
         ? {
-          id: existingPassConditionStep.id,
+          id: existingVisiblePassStep.id,
           payload: {
             testCaseId: testCase.id,
-            stepOrder: expectedStepOrder,
+            stepOrder: visibleExpectedStepOrder,
             actionType: 'assertVisible',
             target: '${expected.result.selector}',
             value: null,
             expectedValue: '${expected.result.value}',
-            description: existingPassConditionStep.description || 'Kiểm tra kết quả mong muốn từ Expected JSON',
+            description: existingVisiblePassStep.description || 'Kiểm tra kết quả mong muốn từ Expected JSON',
           },
         }
         : undefined;
-      const finalStepUpdates = autoExpectedStepUpdate ? [...stepUpdates, autoExpectedStepUpdate] : stepUpdates;
-      const autoExpectedStep = !newStep && !existingPassConditionStep && nestedString(expectedJsonForAutoStep, 'result.selector')
+      const autoExpectedUrlStepUpdate = shouldSyncUrlExpectedStep && existingUrlPassStep
+        ? {
+          id: existingUrlPassStep.id,
+          payload: {
+            testCaseId: testCase.id,
+            stepOrder: Math.max(urlExpectedStepOrder, visibleExpectedStepOrder + 1),
+            actionType: 'assertUrlContains',
+            target: null,
+            value: '${expected.result.url}',
+            expectedValue: '${expected.result.url}',
+            description: existingUrlPassStep.description || 'Kiểm tra URL mong muốn từ Expected JSON',
+          },
+        }
+        : undefined;
+      const convertVisiblePassStepToUrlStepUpdate = shouldConvertVisibleStepToUrlStep && existingVisiblePassStep
+        ? {
+          id: existingVisiblePassStep.id,
+          payload: {
+            testCaseId: testCase.id,
+            stepOrder: Math.max(urlExpectedStepOrder, visibleExpectedStepOrder),
+            actionType: 'assertUrlContains',
+            target: null,
+            value: '${expected.result.url}',
+            expectedValue: '${expected.result.url}',
+            description: existingVisiblePassStep.description || 'Kiểm tra URL mong muốn từ Expected JSON',
+          },
+        }
+        : undefined;
+      const finalStepUpdates = [
+        ...stepUpdates,
+        ...(autoExpectedStepUpdate ? [autoExpectedStepUpdate] : []),
+        ...(convertVisiblePassStepToUrlStepUpdate ? [convertVisiblePassStepToUrlStepUpdate] : []),
+        ...(autoExpectedUrlStepUpdate ? [autoExpectedUrlStepUpdate] : []),
+      ];
+      const autoExpectedStep = !newStep && !existingVisiblePassStep && nestedString(expectedJsonForAutoStep, 'result.selector')
         ? {
           testCaseId: testCase.id,
           stepOrder: maxStepOrder + 1,
@@ -256,6 +301,18 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
           description: 'Kiểm tra kết quả mong muốn từ Expected JSON',
         }
         : undefined;
+      const autoExpectedUrlStep = !newStep && !existingUrlPassStep && nestedString(expectedJsonForAutoStep, 'result.url')
+        ? {
+          testCaseId: testCase.id,
+          stepOrder: Math.max(maxStepOrder + 1, (autoExpectedStep?.stepOrder || visibleExpectedStepOrder) + 1),
+          actionType: 'assertUrlContains',
+          target: null,
+          value: '${expected.result.url}',
+          expectedValue: '${expected.result.url}',
+          description: 'Kiểm tra URL mong muốn từ Expected JSON',
+        }
+        : undefined;
+      const generatedNewStep = newStep || autoExpectedUrlStep || autoExpectedStep;
 
       await onUpdateTestCase(testCase, {
         projectId: project.id,
@@ -264,7 +321,7 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
         description: infoExpanded && data.has('description') ? String(data.get('description') || '').trim() : (testCase.description || ''),
         type: infoExpanded && data.has('type') ? String(data.get('type') || '').trim() : (testCase.type || 'login'),
         status: infoExpanded && data.has('status') ? String(data.get('status') || '').trim() : (testCase.status || 'active'),
-      }, dataSetUpdates, finalStepUpdates, newDataSet, newStep || autoExpectedStep);
+      }, dataSetUpdates, finalStepUpdates, newDataSet, generatedNewStep);
       setEditingTestCaseId(null);
       setAddingDataSetForTestCaseId(null);
       setExpandedStepsForTestCaseId(null);
@@ -342,6 +399,11 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
     return kind === 'auto' ? trimmedValue : `kind=${kind}::${trimmedValue}`;
   }
 
+  function isLikelyUrlOrPath(value: string): boolean {
+    const trimmedValue = value.trim();
+    return /^https?:\/\//i.test(trimmedValue) || trimmedValue.startsWith('/');
+  }
+
   function formatTargetHint(kind: string, value: string): string {
     const trimmedValue = value.trim();
     return kind === 'raw' || kind === 'auto' ? trimmedValue : `kind=${kind}::${trimmedValue}`;
@@ -392,8 +454,14 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
     setExpectedJsonModes((current) => ({ ...current, [key]: mode }));
   }
 
-  function expectedSelectorKind(key: string, selectorValue: string): string {
-    return expectedSelectorKinds[key] || parseExpectedSelector(selectorValue).kind;
+  function expectedSelectorKind(key: string, selectorValue: string, expectedUrl = ''): string {
+    if (expectedSelectorKinds[key]) {
+      return expectedSelectorKinds[key];
+    }
+    if (expectedUrl.trim() && !selectorValue.trim()) {
+      return 'link';
+    }
+    return parseExpectedSelector(selectorValue).kind;
   }
 
   function setExpectedSelectorKind(key: string, kind: string): void {
@@ -575,12 +643,14 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
 
     const selectorKind = String(data.get(`${prefix}SelectorKind`) || 'css');
     const selectorValue = String(data.get(`${prefix}SelectorValue`) || '').trim();
+    const expectedUrl = String(data.get(`${prefix}Url`) || '').trim();
+    const inferredUrl = selectorKind === 'link' && isLikelyUrlOrPath(selectorValue) ? selectorValue : '';
+    const selectorForAssertion = selectorKind === 'link' && inferredUrl ? '' : selectorValue;
     const result: Record<string, string> = {
-      selector: selectorValue ? formatExpectedSelector(selectorKind, selectorValue) : '',
+      ...(selectorForAssertion ? { selector: formatExpectedSelector(selectorKind, selectorForAssertion) } : {}),
       value: String(data.get(`${prefix}Value`) || 'visible').trim() || 'visible',
     };
-    const expectedUrl = String(data.get(`${prefix}Url`) || '').trim();
-    if (selectorKind === 'link' && expectedUrl) result.url = expectedUrl;
+    if (selectorKind === 'link' && (expectedUrl || inferredUrl)) result.url = expectedUrl || inferredUrl;
     return {
       result,
     };
@@ -691,11 +761,25 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
     });
   }
 
+  function findVisiblePassConditionStep(steps: TestCaseStep[]): TestCaseStep | undefined {
+    return steps.find((step) => {
+      const normalized = step.actionType.replace(/[\s_-]/g, '').toLowerCase();
+      return normalized === 'assertvisible' || normalized === 'asserttext';
+    });
+  }
+
+  function findUrlPassConditionStep(steps: TestCaseStep[]): TestCaseStep | undefined {
+    return steps.find((step) => step.actionType.replace(/[\s_-]/g, '').toLowerCase() === 'asserturlcontains');
+  }
+
   function findExpectedJsonForAutoStep(
     dataSetUpdates: Array<{ id: number; payload: TestDataSetRequest }>,
     newDataSet?: TestDataSetRequest
   ): Record<string, unknown> {
-    return dataSetUpdates.find((dataSetUpdate) => nestedString(dataSetUpdate.payload.expectedJson, 'result.selector'))?.payload.expectedJson
+    return dataSetUpdates.find((dataSetUpdate) =>
+      nestedString(dataSetUpdate.payload.expectedJson, 'result.selector') ||
+      nestedString(dataSetUpdate.payload.expectedJson, 'result.url')
+    )?.payload.expectedJson
       || newDataSet?.expectedJson
       || {};
   }
@@ -891,8 +975,10 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
                               const modeKey = dataSetModeKey(dataSet.id);
                               const recordedEntries = recordedDataEntries(dataSet.dataJson);
                               const visibleRecordedEntries = recordedEntries.filter((entry) => entry.value.trim());
-                              const parsedExpectedSelector = parseExpectedSelector(nestedString(dataSet.expectedJson, 'result.selector', '.dashboard'));
-                              const selectedExpectedKind = expectedSelectorKind(modeKey, nestedString(dataSet.expectedJson, 'result.selector', '.dashboard'));
+                              const expectedSelectorValue = nestedString(dataSet.expectedJson, 'result.selector');
+                              const expectedUrlValue = nestedString(dataSet.expectedJson, 'result.url');
+                              const parsedExpectedSelector = parseExpectedSelector(expectedSelectorValue);
+                              const selectedExpectedKind = expectedSelectorKind(modeKey, expectedSelectorValue, expectedUrlValue);
                               return (
                               <div className="rounded-2xl border border-slate-200 bg-white p-4" key={dataSet.id}>
                                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1019,20 +1105,23 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
                                           <option value="auto">Auto</option>
                                         </select>
                                       </label>
-                                      <label className="grid gap-2">
-                                        <span className="text-sm text-slate-600">{expectedTargetLabel(selectedExpectedKind)}</span>
-                                        <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={parsedExpectedSelector.target} name={`expected-${dataSet.id}SelectorValue`} placeholder={expectedTargetPlaceholder(selectedExpectedKind)} />
-                                      </label>
-                                      <label className="grid gap-2">
-                                        <span className="text-sm text-slate-600">Expected value</span>
-                                        <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={nestedString(dataSet.expectedJson, 'result.value', 'visible')} name={`expected-${dataSet.id}Value`} />
-                                      </label>
                                       {selectedExpectedKind === 'link' ? (
                                         <label className="grid gap-2">
-                                          <span className="text-sm text-slate-600">Expected URL</span>
-                                          <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={nestedString(dataSet.expectedJson, 'result.url')} name={`expected-${dataSet.id}Url`} placeholder="VD: /dashboard" />
+                                          <span className="text-sm text-slate-600">URL mong muốn</span>
+                                          <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={expectedUrlValue || parsedExpectedSelector.target} name={`expected-${dataSet.id}Url`} placeholder="VD: /manager/dashboard" />
                                         </label>
-                                      ) : null}
+                                      ) : (
+                                        <>
+                                          <label className="grid gap-2">
+                                            <span className="text-sm text-slate-600">{expectedTargetLabel(selectedExpectedKind)}</span>
+                                            <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={parsedExpectedSelector.target || '.dashboard'} name={`expected-${dataSet.id}SelectorValue`} placeholder={expectedTargetPlaceholder(selectedExpectedKind)} />
+                                          </label>
+                                          <label className="grid gap-2">
+                                            <span className="text-sm text-slate-600">Expected value</span>
+                                            <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue={nestedString(dataSet.expectedJson, 'result.value', 'visible')} name={`expected-${dataSet.id}Value`} />
+                                          </label>
+                                        </>
+                                      )}
                                     </div>
                                   ) : (
                                     <textarea
@@ -1186,20 +1275,23 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
                                       <option value="auto">Auto</option>
                                     </select>
                                   </label>
-                                  <label className="grid gap-2">
-                                    <span className="text-sm text-slate-600">{expectedTargetLabel(expectedSelectorKind(dataSetModeKey('new'), 'kind=css::.dashboard'))}</span>
-                                    <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue=".dashboard" name="newExpectedSelectorValue" placeholder={expectedTargetPlaceholder(expectedSelectorKind(dataSetModeKey('new'), 'kind=css::.dashboard'))} />
-                                  </label>
-                                  <label className="grid gap-2">
-                                    <span className="text-sm text-slate-600">Expected value</span>
-                                    <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="visible" name="newExpectedValue" placeholder="VD: visible" />
-                                  </label>
                                   {expectedSelectorKind(dataSetModeKey('new'), 'kind=css::.dashboard') === 'link' ? (
                                     <label className="grid gap-2">
-                                      <span className="text-sm text-slate-600">Expected URL</span>
-                                      <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="/dashboard" name="newExpectedUrl" placeholder="VD: /dashboard" />
+                                      <span className="text-sm text-slate-600">URL mong muốn</span>
+                                      <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="/dashboard" name="newExpectedUrl" placeholder="VD: /manager/dashboard" />
                                     </label>
-                                  ) : null}
+                                  ) : (
+                                    <>
+                                      <label className="grid gap-2">
+                                        <span className="text-sm text-slate-600">{expectedTargetLabel(expectedSelectorKind(dataSetModeKey('new'), 'kind=css::.dashboard'))}</span>
+                                        <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue=".dashboard" name="newExpectedSelectorValue" placeholder={expectedTargetPlaceholder(expectedSelectorKind(dataSetModeKey('new'), 'kind=css::.dashboard'))} />
+                                      </label>
+                                      <label className="grid gap-2">
+                                        <span className="text-sm text-slate-600">Expected value</span>
+                                        <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="visible" name="newExpectedValue" placeholder="VD: visible" />
+                                      </label>
+                                    </>
+                                  )}
                                 </div>
                               ) : (
                                 <label className="mt-4 grid gap-2">
@@ -1680,6 +1772,11 @@ export function ProjectWorkspace({ project, templates, testCases, testCaseDataSe
                         <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue=".dashboard" name="successSelector" placeholder="VD: .dashboard hoặc Login success" required />
                       </label>
                     </div>
+                    <label className="grid gap-2">
+                      <span className="text-sm text-slate-600">Expected URL sau login</span>
+                      <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="/manager/dashboard" name="successUrl" placeholder="VD: /manager/dashboard" />
+                      <span className="text-xs text-slate-500">Nếu login thành công bằng redirect URL, điền path hoặc URL đích để hệ thống tự kiểm tra thêm bằng assertUrlContains.</span>
+                    </label>
                     <label className="grid gap-2">
                       <span className="text-sm text-slate-600">Username hợp lệ</span>
                       <input className="rounded-2xl border border-slate-200 px-4 py-3" defaultValue="admin@test.com" name="username" required />

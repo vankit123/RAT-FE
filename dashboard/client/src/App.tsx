@@ -523,11 +523,13 @@ export function App() {
 
   async function executeTestCaseRun(testCase: TestCase, queueMeta?: { index: number; total: number }) {
     if (!queueMeta && (runningTestCaseId !== null || runQueueActiveRef.current)) {
+      setTestCaseStatus({ text: "Busy", tone: "running" });
       return null;
     }
     const abortController = new AbortController();
     runAbortControllerRef.current = abortController;
     setRunningTestCaseId(testCase.id);
+    setTestCaseStatus({ text: "Running", tone: "running" });
     setRunningLabel(
       queueMeta
         ? `Running ${testCase.code} (${queueMeta.index}/${queueMeta.total})`
@@ -555,6 +557,10 @@ export function App() {
       runAbortControllerRef.current = null;
       setRunningTestCaseId(null);
       setRunProgress((current) => current ? { ...current, running: false } : null);
+      setTestCaseStatus({
+        text: result.status === "passed" ? "Passed" : "Failed",
+        tone: result.status,
+      });
       setStageMeta(`Đã chạy xong test case ${testCase.name}: ${result.status}`);
       return result;
     } catch (error) {
@@ -564,6 +570,10 @@ export function App() {
       setRunningTestCaseId(null);
       setRunningLabel(undefined);
       setRunProgress((current) => current ? { ...current, running: false } : null);
+      setTestCaseStatus({
+        text: stoppedByUser ? "Stopped" : "Failed",
+        tone: stoppedByUser ? undefined : "failed",
+      });
       setStageMeta(
         stoppedByUser
           ? `Đã dừng test case ${testCase.name}.`

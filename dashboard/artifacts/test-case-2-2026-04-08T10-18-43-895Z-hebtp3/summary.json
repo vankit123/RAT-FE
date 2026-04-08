@@ -1,0 +1,98 @@
+{
+  "runId": "test-case-2-2026-04-08T10-18-43-895Z-hebtp3",
+  "startedAt": "2026-04-08T10:18:43.896Z",
+  "finishedAt": "2026-04-08T10:18:58.707Z",
+  "durationMs": 14811,
+  "status": "failed",
+  "currentUrl": "http://localhost:5173/manager/dashboard",
+  "targetUrl": "http://localhost:5173",
+  "errorMessage": "page.waitForURL: Timeout 10000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
+  "flowName": "login",
+  "steps": [
+    {
+      "name": "[TC_LOGIN_01_VALID] Đi tới trang login",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 0,
+      "startedAt": "2026-04-08T10:18:44.115Z",
+      "endedAt": "2026-04-08T10:18:45.161Z",
+      "durationMs": 1046
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập username hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 1,
+      "startedAt": "2026-04-08T10:18:45.161Z",
+      "endedAt": "2026-04-08T10:18:45.591Z",
+      "durationMs": 430
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập password hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 2,
+      "startedAt": "2026-04-08T10:18:45.591Z",
+      "endedAt": "2026-04-08T10:18:45.920Z",
+      "durationMs": 329
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Click nút đăng nhập",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 3,
+      "startedAt": "2026-04-08T10:18:45.920Z",
+      "endedAt": "2026-04-08T10:18:46.237Z",
+      "durationMs": 317
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Kiểm tra dashboard hiển thị",
+      "status": "failed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 4,
+      "startedAt": "2026-04-08T10:18:46.237Z",
+      "endedAt": "2026-04-08T10:18:56.241Z",
+      "durationMs": 10004,
+      "error": "page.waitForURL: Timeout 10000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================"
+    }
+  ],
+  "dataSets": [
+    {
+      "testDataSetId": 2,
+      "label": "DataSet 2",
+      "status": "failed",
+      "durationMs": 12283,
+      "stepCount": 6,
+      "executedStepCount": 5,
+      "failedStepCount": 1,
+      "errorMessage": "page.waitForURL: Timeout 10000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================"
+    }
+  ],
+  "artifacts": {
+    "screenshot": {
+      "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-18-43-895Z-hebtp3\\failure.png",
+      "url": "/artifacts/test-case-2-2026-04-08T10-18-43-895Z-hebtp3/failure.png"
+    },
+    "video": {
+      "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-18-43-895Z-hebtp3\\page@ce061c3aca51988fedc8e3d29edb5bf7.webm",
+      "url": "/artifacts/test-case-2-2026-04-08T10-18-43-895Z-hebtp3/page@ce061c3aca51988fedc8e3d29edb5bf7.webm",
+      "label": "Latest video"
+    },
+    "videos": [
+      {
+        "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-18-43-895Z-hebtp3\\page@ce061c3aca51988fedc8e3d29edb5bf7.webm",
+        "url": "/artifacts/test-case-2-2026-04-08T10-18-43-895Z-hebtp3/page@ce061c3aca51988fedc8e3d29edb5bf7.webm",
+        "testDataSetId": 2,
+        "label": "DataSet 2"
+      }
+    ]
+  },
+  "input": {
+    "testCaseId": 2
+  }
+}

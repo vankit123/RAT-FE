@@ -1,0 +1,104 @@
+{
+  "runId": "test-case-2-2026-04-08T10-27-24-299Z-vubuwy",
+  "startedAt": "2026-04-08T10:27:24.300Z",
+  "finishedAt": "2026-04-08T10:27:29.350Z",
+  "durationMs": 5050,
+  "status": "passed",
+  "currentUrl": "http://localhost:5173/manager/dashboard",
+  "targetUrl": "http://localhost:5173",
+  "errorMessage": null,
+  "flowName": "login",
+  "steps": [
+    {
+      "name": "[TC_LOGIN_01_VALID] Đi tới trang login",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 0,
+      "startedAt": "2026-04-08T10:27:24.507Z",
+      "endedAt": "2026-04-08T10:27:25.616Z",
+      "durationMs": 1109
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập username hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 1,
+      "startedAt": "2026-04-08T10:27:25.616Z",
+      "endedAt": "2026-04-08T10:27:26.073Z",
+      "durationMs": 457
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập password hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 2,
+      "startedAt": "2026-04-08T10:27:26.073Z",
+      "endedAt": "2026-04-08T10:27:26.400Z",
+      "durationMs": 327
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Click nút đăng nhập",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 3,
+      "startedAt": "2026-04-08T10:27:26.400Z",
+      "endedAt": "2026-04-08T10:27:26.723Z",
+      "durationMs": 323
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Kiểm tra dashboard hiển thị",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 4,
+      "startedAt": "2026-04-08T10:27:26.723Z",
+      "endedAt": "2026-04-08T10:27:26.841Z",
+      "durationMs": 118
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Kiểm tra URL mong muốn từ Expected JSON",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 5,
+      "startedAt": "2026-04-08T10:27:26.841Z",
+      "endedAt": "2026-04-08T10:27:26.905Z",
+      "durationMs": 64
+    }
+  ],
+  "dataSets": [
+    {
+      "testDataSetId": 2,
+      "label": "DataSet 2",
+      "status": "passed",
+      "durationMs": 2486,
+      "stepCount": 6,
+      "executedStepCount": 6,
+      "failedStepCount": 0,
+      "errorMessage": null
+    }
+  ],
+  "artifacts": {
+    "screenshot": null,
+    "video": {
+      "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-27-24-299Z-vubuwy\\page@72986ecf8ff0533d483d1865627a0b5f.webm",
+      "url": "/artifacts/test-case-2-2026-04-08T10-27-24-299Z-vubuwy/page@72986ecf8ff0533d483d1865627a0b5f.webm",
+      "label": "Latest video"
+    },
+    "videos": [
+      {
+        "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-27-24-299Z-vubuwy\\page@72986ecf8ff0533d483d1865627a0b5f.webm",
+        "url": "/artifacts/test-case-2-2026-04-08T10-27-24-299Z-vubuwy/page@72986ecf8ff0533d483d1865627a0b5f.webm",
+        "testDataSetId": 2,
+        "label": "DataSet 2"
+      }
+    ]
+  },
+  "input": {
+    "testCaseId": 2
+  }
+}

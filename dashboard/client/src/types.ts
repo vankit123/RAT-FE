@@ -96,6 +96,7 @@ export type LoginTemplateInput = {
   submitSelector: string;
   successSelectorKind: 'auto' | 'text' | 'button' | 'link' | 'label' | 'placeholder' | 'css';
   successSelector: string;
+  successUrl?: string;
   username: string;
   password: string;
 };

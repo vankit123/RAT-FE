@@ -1,0 +1,98 @@
+{
+  "runId": "test-case-2-2026-04-08T10-08-30-737Z-dn5dor",
+  "startedAt": "2026-04-08T10:08:30.737Z",
+  "finishedAt": "2026-04-08T10:08:57.376Z",
+  "durationMs": 26639,
+  "status": "failed",
+  "currentUrl": "http://localhost:5173/manager/dashboard",
+  "targetUrl": "http://localhost:5173",
+  "errorMessage": "Could not find element for \".dashboard\". Choose an element type like Text, Button, Label, Placeholder, or CSS and try again.",
+  "flowName": "login",
+  "steps": [
+    {
+      "name": "[TC_LOGIN_01_VALID] Đi tới trang login",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 0,
+      "startedAt": "2026-04-08T10:08:30.940Z",
+      "endedAt": "2026-04-08T10:08:32.074Z",
+      "durationMs": 1134
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập username hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 1,
+      "startedAt": "2026-04-08T10:08:32.075Z",
+      "endedAt": "2026-04-08T10:08:32.510Z",
+      "durationMs": 435
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Nhập password hợp lệ",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 2,
+      "startedAt": "2026-04-08T10:08:32.510Z",
+      "endedAt": "2026-04-08T10:08:32.849Z",
+      "durationMs": 339
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Click nút đăng nhập",
+      "status": "passed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 3,
+      "startedAt": "2026-04-08T10:08:32.849Z",
+      "endedAt": "2026-04-08T10:08:33.180Z",
+      "durationMs": 331
+    },
+    {
+      "name": "[TC_LOGIN_01_VALID] Kiểm tra dashboard hiển thị",
+      "status": "failed",
+      "testDataSetId": 2,
+      "dataSetLabel": "DataSet 2",
+      "flowStepIndex": 4,
+      "startedAt": "2026-04-08T10:08:33.180Z",
+      "endedAt": "2026-04-08T10:08:53.326Z",
+      "durationMs": 20146,
+      "error": "Could not find element for \".dashboard\". Choose an element type like Text, Button, Label, Placeholder, or CSS and try again."
+    }
+  ],
+  "dataSets": [
+    {
+      "testDataSetId": 2,
+      "label": "DataSet 2",
+      "status": "failed",
+      "durationMs": 22549,
+      "stepCount": 6,
+      "executedStepCount": 5,
+      "failedStepCount": 1,
+      "errorMessage": "Could not find element for \".dashboard\". Choose an element type like Text, Button, Label, Placeholder, or CSS and try again."
+    }
+  ],
+  "artifacts": {
+    "screenshot": {
+      "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-08-30-737Z-dn5dor\\failure.png",
+      "url": "/artifacts/test-case-2-2026-04-08T10-08-30-737Z-dn5dor/failure.png"
+    },
+    "video": {
+      "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-08-30-737Z-dn5dor\\page@72d5a3cc83534333abe6675ba15e8336.webm",
+      "url": "/artifacts/test-case-2-2026-04-08T10-08-30-737Z-dn5dor/page@72d5a3cc83534333abe6675ba15e8336.webm",
+      "label": "Latest video"
+    },
+    "videos": [
+      {
+        "absolutePath": "D:\\Reusable Automation Testing\\RAT-FE\\dashboard\\artifacts\\test-case-2-2026-04-08T10-08-30-737Z-dn5dor\\page@72d5a3cc83534333abe6675ba15e8336.webm",
+        "url": "/artifacts/test-case-2-2026-04-08T10-08-30-737Z-dn5dor/page@72d5a3cc83534333abe6675ba15e8336.webm",
+        "testDataSetId": 2,
+        "label": "DataSet 2"
+      }
+    ]
+  },
+  "input": {
+    "testCaseId": 2
+  }
+}

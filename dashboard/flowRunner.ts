@@ -80,6 +80,21 @@ async function waitForVisibleText(page: Page, text: string, timeoutMs: number): 
   }
 }
 
+async function waitForUrlContains(page: Page, expectedValue: string, timeoutMs: number): Promise<void> {
+  const pattern = new RegExp(expectedValue);
+  await page.waitForFunction(
+    (expectedPatternSource: string) => {
+      try {
+        return new RegExp(expectedPatternSource).test(window.location.href);
+      } catch {
+        return false;
+      }
+    },
+    pattern.source,
+    { timeout: timeoutMs }
+  );
+}
+
 async function verifyFilledValue(locator: Locator, expectedValue: string): Promise<boolean> {
   try {
     return await locator.evaluate(
@@ -351,7 +366,7 @@ async function executeStep(page: Page, step: FlowStep, timeoutMs: number): Promi
       return;
     case 'assertUrlContains':
       if (!step.value) throw new Error('assertUrlContains action requires value');
-      await page.waitForURL(new RegExp(step.value), { timeout: timeoutMs });
+      await waitForUrlContains(page, step.value, timeoutMs);
       return;
     case 'waitFor':
       if (!step.selector) throw new Error('waitFor action requires selector');

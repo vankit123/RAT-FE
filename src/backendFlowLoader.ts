@@ -147,6 +147,16 @@ function resolvePlaceholders(value: string | null | undefined, data: Record<stri
   });
 }
 
+function canFallbackToExpectedUrl(action: Step['action'], value: string | null | undefined, data: Record<string, unknown>): boolean {
+  const normalizedValue = String(value || '').trim();
+  return (
+    (action === 'assertVisible' || action === 'assertText') &&
+    normalizedValue.includes('${expected.result.selector}') &&
+    resolveDataPath(data, 'expected.result.selector') === undefined &&
+    resolveDataPath(data, 'expected.result.url') !== undefined
+  );
+}
+
 function shouldUseVisibleAssertion(action: Step['action'], target: string | undefined, expectedValue: string | undefined): boolean {
   return action === 'assertText' && /^kind=text::/i.test(String(target || '').trim()) && String(expectedValue || '').trim().toLowerCase() === 'visible';
 }
@@ -160,10 +170,17 @@ function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, da
     expected: expectedJson,
   };
   const context = `test_case_steps id=${step.id}, dataSet=${dataSet?.code || dataSet?.id || 'none'}`;
-  const resolvedTarget = resolvePlaceholders(step.target, data, `${context}, target`);
+  const fallbackToExpectedUrl = canFallbackToExpectedUrl(action, step.target, data);
+  const resolvedTarget = fallbackToExpectedUrl
+    ? undefined
+    : resolvePlaceholders(step.target, data, `${context}, target`);
   const resolvedValue = resolvePlaceholders(step.value, data, `${context}, value`);
   const resolvedExpectedValue = resolvePlaceholders(step.expectedValue, data, `${context}, expectedValue`);
-  const effectiveAction = shouldUseVisibleAssertion(action, resolvedTarget, resolvedExpectedValue) ? 'assertVisible' : action;
+  const effectiveAction = fallbackToExpectedUrl
+    ? 'assertUrlContains'
+    : shouldUseVisibleAssertion(action, resolvedTarget, resolvedExpectedValue)
+      ? 'assertVisible'
+      : action;
   const common = {
     action: effectiveAction,
     description: `${dataSet ? `[${dataSet.code}] ` : ''}${step.description || ''}`.trim() || undefined,
