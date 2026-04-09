@@ -21,6 +21,7 @@ import { createLoginFunctionalTest } from "./services/functionalTestService";
 import { getLatestProjectRunResult, runBackendTestCaseRequest } from "./services/flowService";
 import { getTemplates } from "./services/templateService";
 import {
+  InitialTestCaseSetInput,
   LoginTemplateInput,
   Project,
   ProjectRequest,
@@ -129,6 +130,94 @@ function recordingTouchesVnpay(recording: RecordingStopResult): boolean {
   );
 }
 
+function slugifyInputKey(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "input";
+}
+
+function deriveRecordedInputKey(step: RecordingStopResult["steps"][number], index: number): string {
+  const source = String(step.selector || step.description || `step_${index + 1}`);
+  const labelMatch =
+    /kind=label::([^]+)$/i.exec(source) ||
+    /kind=placeholder::([^]+)$/i.exec(source) ||
+    /kind=text::([^]+)$/i.exec(source) ||
+    /\[name="([^"]+)"\]/i.exec(source) ||
+    /\[placeholder="([^"]+)"\]/i.exec(source) ||
+    /\[aria-label="([^"]+)"\]/i.exec(source);
+
+  return slugifyInputKey(labelMatch?.[1] || source);
+}
+
+function isStableRecordedFieldSelector(selector: string | undefined): boolean {
+  const normalized = String(selector || "").trim();
+  if (!normalized) return false;
+  if (normalized.startsWith("kind=")) return false;
+  if (/^\[value=/i.test(normalized)) return false;
+  return (
+    normalized.startsWith("#") ||
+    /^\[(data-testid|name|aria-label|placeholder)=/i.test(normalized)
+  );
+}
+
+function optionValueFromSelector(selector: string | undefined): string {
+  const normalized = String(selector || "").trim();
+  const match = /^kind=option::(.+)$/i.exec(normalized);
+  return String(match?.[1] || "").trim();
+}
+
+function buildRecordedInputData(
+  steps: RecordingStopResult["steps"],
+): Record<string, Record<string, string>> {
+  const grouped: Record<string, Record<string, string>> = {};
+  const lastFieldSelectorByScreen: Record<string, string> = {};
+
+  steps.forEach((step, index) => {
+    const screenKey =
+      String(step.screenKey || "").trim().replace(/[^a-zA-Z0-9_]+/g, "_") ||
+      "screen";
+    const selector = String(step.selector || "").trim();
+
+    if (isStableRecordedFieldSelector(selector)) {
+      lastFieldSelectorByScreen[screenKey] = selector;
+    }
+
+    if (step.action === "fill" && String(step.value || "").trim()) {
+      const effectiveSelector =
+        /^\[value=/i.test(selector) && lastFieldSelectorByScreen[screenKey]
+          ? lastFieldSelectorByScreen[screenKey]
+          : selector;
+      const inputKey = deriveRecordedInputKey(
+        { ...step, selector: effectiveSelector },
+        index,
+      );
+      if (!grouped[screenKey]) {
+        grouped[screenKey] = {};
+      }
+      grouped[screenKey][inputKey] = String(step.value || "").trim();
+      return;
+    }
+
+    if (step.action === "click") {
+      const optionValue = optionValueFromSelector(selector);
+      const lastFieldSelector = lastFieldSelectorByScreen[screenKey];
+      if (optionValue && lastFieldSelector) {
+        const inputKey = deriveRecordedInputKey(
+          { ...step, selector: lastFieldSelector },
+          index,
+        );
+        if (!grouped[screenKey]) {
+          grouped[screenKey] = {};
+        }
+        grouped[screenKey][inputKey] = optionValue;
+      }
+    }
+  });
+
+  return grouped;
+}
+
 export function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
@@ -161,6 +250,7 @@ export function App() {
   const [runningTestCaseId, setRunningTestCaseId] = useState<number | null>(null);
   const [recordedSteps, setRecordedSteps] = useState("");
   const [recorderStartUrl, setRecorderStartUrl] = useState("http://localhost:5173/signin");
+  const [recorderAutoStart, setRecorderAutoStart] = useState(false);
   const runAbortControllerRef = useRef<AbortController | null>(null);
   const stopQueuedRunsRef = useRef(false);
   const runQueueActiveRef = useRef(false);
@@ -169,6 +259,12 @@ export function App() {
     () => projects.find((project) => project.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
+
+  useEffect(() => {
+    if (activeView !== "recorder") {
+      setRecorderAutoStart(false);
+    }
+  }, [activeView]);
 
   const selectedProjectTestCases = useMemo(
     () =>
@@ -306,6 +402,7 @@ export function App() {
     payload: Omit<TestCaseRequest, "projectId" | "type" | "status">,
     template: TemplateSummary,
     input: LoginTemplateInput,
+    initialDataSet: InitialTestCaseSetInput,
   ) {
     if (!selectedProject) return;
     if (template.id !== "login") {
@@ -321,6 +418,7 @@ export function App() {
         selectedProject,
         payload,
         input,
+        initialDataSet,
       );
       await refreshTestCases();
       setTestCaseStatus({ text: "Created", tone: "passed" });
@@ -443,7 +541,13 @@ export function App() {
     try {
       const sanitizedRecordedSteps = buildRuntimeRecordedSteps(recording);
       const hasVnpayInRecording = recordingTouchesVnpay(recording);
+      const recordedInputs = buildRecordedInputData(sanitizedRecordedSteps);
       const recordedData = {
+        ...(Object.keys(recordedInputs).length
+          ? {
+              inputs: recordedInputs,
+            }
+          : {}),
         recorded: Object.fromEntries(
           sanitizedRecordedSteps.map((step, index) => [
             `step${index + 1}`,
@@ -451,6 +555,11 @@ export function App() {
               action: step.action,
               target: step.selector || step.url || '',
               value: step.value || '',
+              ...(step.screenKey
+                ? {
+                    screenKey: step.screenKey,
+                  }
+                : {}),
             },
           ]),
         ),
@@ -744,7 +853,7 @@ export function App() {
         projectsExpanded={projectsExpanded}
         selectedProjectId={selectedProjectId}
       />
-      <main className="mx-auto w-[min(1300px,calc(100%-32px))] py-7">
+      <main className="mx-auto w-[min(1600px,calc(100%-24px))] py-7">
         <header className="flex flex-wrap items-start justify-between gap-5 px-1 pb-6">
           <div>
             <p className="mb-2 text-xs uppercase tracking-[0.18em] text-blue-700">
@@ -793,6 +902,7 @@ export function App() {
               onCreateTestCase={handleCreateTestCase}
               onOpenRecorder={() => {
                 setRecorderStartUrl(selectedProject.baseUrl || "http://localhost:5173/signin");
+                setRecorderAutoStart(true);
                 setActiveView("recorder");
                 setStageMeta(`Recorder cho dự án ${selectedProject.name}${selectedProject.baseUrl ? ` - ${selectedProject.baseUrl}` : ""}`);
               }}
@@ -818,10 +928,12 @@ export function App() {
 
           {activeView === "recorder" ? (
             <RecorderView
+              autoStart={recorderAutoStart}
               initialUrl={recorderStartUrl}
               projectName={selectedProject?.name}
               onSaveAsProjectTestCase={handleSaveRecordingAsTestCase}
               onUseRecordedSteps={(code) => {
+                setRecorderAutoStart(false);
                 setRecordedSteps(code);
                 setActiveView("custom");
               }}

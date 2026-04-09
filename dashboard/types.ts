@@ -30,10 +30,13 @@ export interface FlowStep {
   selector?: string;
   url?: string;
   value?: string;
+  screenKey?: string;
   backend?: {
     testCaseStepId: number;
     testCaseId: number;
     testDataSetId?: number;
+    testDataSetCode?: string;
+    testDataSetName?: string;
     stepOrder: number;
     actionType: string;
     target?: string | null;
@@ -180,6 +183,7 @@ export interface RecorderEvent {
   label?: string;
   inputType?: string;
   value?: string;
+  screenKey?: string;
   url: string;
   timestamp: number;
 }

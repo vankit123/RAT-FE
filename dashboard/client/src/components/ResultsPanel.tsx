@@ -65,10 +65,10 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-                  <span className="text-sm text-slate-500">DataSet hiện tại</span>
+                  <span className="text-sm text-slate-500">Test case set hiện tại</span>
                   <strong className="mt-2 block">
                     {progress.currentDataSetLabel || 'Đang chuẩn bị'}
-                    {progress.currentDataSetIndex && progress.totalDataSets ? ` (${progress.currentDataSetIndex}/${progress.totalDataSets})` : ''}
+                    {` (${progress.currentDataSetIndex}/${progress.totalDataSets})` }
                   </strong>
                 </div>
                 <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
@@ -122,11 +122,11 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
             <div className="mt-5 rounded-2xl border border-slate-200 bg-white/80 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">DataSet Results</p>
-                  <h4 className="mt-1 text-lg font-black text-slate-900">Kết quả theo từng dataSet</h4>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">Test Case Set Results</p>
+                  <h4 className="mt-1 text-lg font-black text-slate-900">Kết quả theo từng test case set</h4>
                 </div>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
-                  {result.dataSets.length} dataSet
+                  {result.dataSets.length} test case set
                 </span>
               </div>
               <div className="mt-4 grid gap-4">
@@ -180,7 +180,7 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
                         ))
                       ) : (
                         <div className="rounded-xl border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-                          Không có step nào được ghi nhận cho dataSet này.
+                          Không có step nào được ghi nhận cho test case set này.
                         </div>
                       )}
                     </div>
@@ -213,7 +213,7 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
                   {videos.map((video, index) => (
                     <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3" key={`${video.url}-${index}`}>
                       <p className="mb-2 text-sm font-semibold text-slate-700">
-                        {video.label || (video.testDataSetId ? `DataSet ${video.testDataSetId}` : `Video ${index + 1}`)}
+                        {video.label }
                       </p>
                       <video className="w-full rounded-2xl border border-slate-200" controls src={video.url}></video>
                     </div>
@@ -235,7 +235,7 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
             <div>
               <strong className="text-slate-800">{progress.testCaseName || 'Test case'} đang chạy</strong>
               <p className="mt-2">
-                DataSet: {progress.currentDataSetLabel || 'Đang chuẩn bị'}
+                Test case set: {progress.currentDataSetLabel || 'Đang chuẩn bị'}
                 {progress.currentDataSetIndex && progress.totalDataSets ? ` (${progress.currentDataSetIndex}/${progress.totalDataSets})` : ''}
               </p>
               <p>

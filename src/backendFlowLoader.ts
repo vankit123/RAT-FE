@@ -82,6 +82,16 @@ function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
+function formatTestDataSetLabel(dataSet?: TestDataSetResponse): string | undefined {
+  if (!dataSet) return undefined;
+  const code = String(dataSet.code || '').trim();
+  const name = String(dataSet.name || '').trim();
+  if (code && name && code !== name) {
+    return `${code} - ${name}`;
+  }
+  return code || name || undefined;
+}
+
 function joinUrl(baseUrl: string | null | undefined, pathOrUrl: string | null | undefined): string | undefined {
   const value = String(pathOrUrl || '').trim();
   if (!value) return undefined;
@@ -157,8 +167,93 @@ function canFallbackToExpectedUrl(action: Step['action'], value: string | null |
   );
 }
 
+function canFallbackFromExpectedUrlToSelector(
+  action: Step['action'],
+  value: string | null | undefined,
+  data: Record<string, unknown>,
+): boolean {
+  const normalizedValue = String(value || '').trim();
+  return (
+    action === 'assertUrlContains' &&
+    normalizedValue.includes('${expected.result.url}') &&
+    resolveDataPath(data, 'expected.result.url') === undefined &&
+    resolveDataPath(data, 'expected.result.selector') !== undefined
+  );
+}
+
 function shouldUseVisibleAssertion(action: Step['action'], target: string | undefined, expectedValue: string | undefined): boolean {
   return action === 'assertText' && /^kind=text::/i.test(String(target || '').trim()) && String(expectedValue || '').trim().toLowerCase() === 'visible';
+}
+
+function stepIsAssertion(step: TestCaseStepResponse): boolean {
+  const actionType = String(step.actionType || '').trim().replace(/[_\-\s]/g, '').toLowerCase();
+  return ['assertvisible', 'asserttext', 'asserturlcontains'].includes(actionType);
+}
+
+function buildExpectedResultStep(project: ProjectResponse, testCase: TestCaseResponse, dataSet: TestDataSetResponse): Step | null {
+  const expectedJson = dataSet.expectedJson || dataSet.expected_json;
+  const result =
+    expectedJson && typeof expectedJson === 'object' && !Array.isArray(expectedJson)
+      ? (expectedJson as Record<string, unknown>).result
+      : null;
+
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return null;
+  }
+
+  const resultObject = result as Record<string, unknown>;
+  const selector = String(resultObject.selector || '').trim();
+  const url = String(resultObject.url || '').trim();
+  const value = String(resultObject.value || 'visible').trim() || 'visible';
+  const dataSetLabel = formatTestDataSetLabel(dataSet);
+
+  if (url) {
+    return {
+      action: 'assertUrlContains',
+      value: joinUrl(project.baseUrl, url) || url,
+      description: `[AUTO][${dataSet.code}] Verify expected URL`.trim(),
+      backend: {
+        testCaseStepId: -1,
+        testCaseId: testCase.id,
+        testDataSetId: dataSet.id,
+        testDataSetCode: dataSet.code,
+        testDataSetName: dataSetLabel,
+        stepOrder: Number.MAX_SAFE_INTEGER,
+        actionType: 'assertUrlContains(auto)',
+        target: null,
+        value: url,
+        expectedValue: value,
+        externalPayment: normalizeExternalPaymentConfig(dataSet.dataJson),
+      },
+    };
+  }
+
+  if (!selector) {
+    return null;
+  }
+
+  const action: Step['action'] =
+    value.toLowerCase() === 'visible' ? 'assertVisible' : 'assertText';
+
+  return {
+    action,
+    selector,
+    value: action === 'assertText' ? value : undefined,
+    description: `[AUTO][${dataSet.code}] Verify expected result`.trim(),
+    backend: {
+        testCaseStepId: -1,
+      testCaseId: testCase.id,
+      testDataSetId: dataSet.id,
+      testDataSetCode: dataSet.code,
+      testDataSetName: dataSetLabel,
+      stepOrder: Number.MAX_SAFE_INTEGER,
+      actionType: `${action}(auto)`,
+      target: selector,
+      value: null,
+      expectedValue: value,
+      externalPayment: normalizeExternalPaymentConfig(dataSet.dataJson),
+    },
+  };
 }
 
 function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, dataSet?: TestDataSetResponse): Step {
@@ -171,14 +266,31 @@ function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, da
   };
   const context = `test_case_steps id=${step.id}, dataSet=${dataSet?.code || dataSet?.id || 'none'}`;
   const fallbackToExpectedUrl = canFallbackToExpectedUrl(action, step.target, data);
+  const fallbackFromExpectedUrlToSelector = canFallbackFromExpectedUrlToSelector(
+    action,
+    step.value,
+    data,
+  );
   const resolvedTarget = fallbackToExpectedUrl
     ? undefined
-    : resolvePlaceholders(step.target, data, `${context}, target`);
-  const resolvedValue = resolvePlaceholders(step.value, data, `${context}, value`);
-  const resolvedExpectedValue = resolvePlaceholders(step.expectedValue, data, `${context}, expectedValue`);
+    : fallbackFromExpectedUrlToSelector
+      ? resolveDataPath(data, 'expected.result.selector')
+      : resolvePlaceholders(step.target, data, `${context}, target`);
+  const resolvedValue = fallbackFromExpectedUrlToSelector
+    ? undefined
+    : resolvePlaceholders(step.value, data, `${context}, value`);
+  const fallbackExpectedValue =
+    resolveDataPath(data, 'expected.result.value') || 'visible';
+  const resolvedExpectedValue = fallbackFromExpectedUrlToSelector
+    ? fallbackExpectedValue
+    : resolvePlaceholders(step.expectedValue, data, `${context}, expectedValue`);
   const effectiveAction = fallbackToExpectedUrl
     ? 'assertUrlContains'
-    : shouldUseVisibleAssertion(action, resolvedTarget, resolvedExpectedValue)
+    : fallbackFromExpectedUrlToSelector
+      ? String(fallbackExpectedValue).trim().toLowerCase() === 'visible'
+        ? 'assertVisible'
+        : 'assertText'
+      : shouldUseVisibleAssertion(action, resolvedTarget, resolvedExpectedValue)
       ? 'assertVisible'
       : action;
   const common = {
@@ -194,6 +306,8 @@ function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, da
         testCaseStepId: step.id,
         testCaseId: step.testCaseId,
         testDataSetId: dataSet?.id,
+        testDataSetCode: dataSet?.code,
+        testDataSetName: formatTestDataSetLabel(dataSet),
         stepOrder: step.stepOrder,
         actionType: effectiveAction,
         target: resolvedTarget || null,
@@ -212,6 +326,8 @@ function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, da
         testCaseStepId: step.id,
         testCaseId: step.testCaseId,
         testDataSetId: dataSet?.id,
+        testDataSetCode: dataSet?.code,
+        testDataSetName: formatTestDataSetLabel(dataSet),
         stepOrder: step.stepOrder,
         actionType: effectiveAction,
         target: resolvedTarget || null,
@@ -230,6 +346,8 @@ function mapBackendStep(step: TestCaseStepResponse, project: ProjectResponse, da
       testCaseStepId: step.id,
       testCaseId: step.testCaseId,
       testDataSetId: dataSet?.id,
+      testDataSetCode: dataSet?.code,
+      testDataSetName: formatTestDataSetLabel(dataSet),
       stepOrder: step.stepOrder,
       actionType: effectiveAction,
       target: resolvedTarget || null,
@@ -251,12 +369,22 @@ export async function loadBackendTestCaseFlow(testCaseId: number, backendBaseUrl
   const caseSteps = allSteps
     .filter((step) => step.testCaseId === testCase.id)
     .sort((left, right) => left.stepOrder - right.stepOrder);
+  const hasExplicitAssertionStep = caseSteps.some(stepIsAssertion);
   const dataSets = allMappings
     .filter((mapping) => mapping.testCaseId === testCase.id)
     .map((mapping) => allDataSets.find((dataSet) => dataSet.id === mapping.testDataSetId))
     .filter((dataSet): dataSet is TestDataSetResponse => Boolean(dataSet));
   const steps = dataSets.length
-    ? dataSets.flatMap((dataSet) => caseSteps.map((step) => mapBackendStep(step, project, dataSet)))
+    ? dataSets.flatMap((dataSet) => {
+        const mappedSteps = caseSteps.map((step) => mapBackendStep(step, project, dataSet));
+        if (!hasExplicitAssertionStep) {
+          const expectedResultStep = buildExpectedResultStep(project, testCase, dataSet);
+          if (expectedResultStep) {
+            mappedSteps.push(expectedResultStep);
+          }
+        }
+        return mappedSteps;
+      })
     : caseSteps.map((step) => mapBackendStep(step, project));
 
   return {

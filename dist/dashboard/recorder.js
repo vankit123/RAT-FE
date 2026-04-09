@@ -50,6 +50,38 @@ function selectorBuilderScript() {
       function normalizeText(value) {
         return String(value || '').replace(/\\s+/g, ' ').trim();
       }
+      function slugify(value) {
+        return String(value || '')
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\\u0300-\\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'screen';
+      }
+      function screenKeyFromUrl(rawUrl) {
+        try {
+          const parsed = new URL(rawUrl || location.href, location.origin);
+          const pathKey = slugify(parsed.pathname.replace(/^\\/+|\\/+$/g, '') || 'home');
+          return pathKey;
+        } catch {
+          return 'screen';
+        }
+      }
+      function closestDialogHeading(element) {
+        const dialog = element && element.closest
+          ? element.closest('[role="dialog"],[aria-modal="true"],dialog,[data-slot="dialog-content"],[data-state="open"]')
+          : null;
+        if (!dialog || !dialog.querySelector) return '';
+        const heading = dialog.querySelector('h1,h2,h3,[role="heading"],[data-slot="dialog-title"]');
+        return normalizeText(heading ? (heading.innerText || heading.textContent || '') : '');
+      }
+      function resolveScreenKey(element) {
+        const baseKey = screenKeyFromUrl(location.href);
+        const dialogHeading = slugify(closestDialogHeading(element));
+        return dialogHeading && dialogHeading !== 'screen'
+          ? baseKey + '__' + dialogHeading
+          : baseKey;
+      }
       function toElement(node) {
         if (!node) return null;
         if (node.nodeType === Node.ELEMENT_NODE) return node;
@@ -114,6 +146,8 @@ function selectorBuilderScript() {
       function stableAttributeSelector(element) {
         if (!element || !element.getAttribute) return '';
         const exactTarget = element;
+        const stableId = exactTarget.getAttribute('id');
+        if (stableId && isStableId(stableId)) return '#' + CSS.escape(stableId);
         const nearestTestIdTarget = element.closest ? element.closest('[data-testid]') : null;
         const target = nearestTestIdTarget || exactTarget;
         if (!target || !target.getAttribute) return '';
@@ -133,10 +167,15 @@ function selectorBuilderScript() {
       }
       function looksLikeHoverMenuTrigger(element) {
         if (!element || !element.getAttribute) return false;
+        if (isFormFieldElement(element) || looksLikeSelectTrigger(element)) {
+          return false;
+        }
+        const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
         return (
           element.getAttribute('data-slot') === 'navigation-menu-trigger' ||
           element.getAttribute('role') === 'menuitem' ||
-          (element.getAttribute('aria-controls') && element.getAttribute('aria-expanded') !== null) ||
+          ariaHasPopup === 'menu' ||
+          (element.getAttribute('aria-controls') && ariaHasPopup === 'menu' && element.getAttribute('aria-expanded') !== null) ||
           (element.tagName && element.tagName.toLowerCase() === 'button' && element.closest('[data-slot="navigation-menu"]'))
         );
       }
@@ -183,6 +222,8 @@ function selectorBuilderScript() {
       function semanticSelector(element) {
         if (!element || !element.tagName) return 'unknown';
         const tagName = element.tagName.toLowerCase();
+        const stableId = element.getAttribute('id');
+        if (stableId && isStableId(stableId)) return '#' + CSS.escape(stableId);
         const testId = element.getAttribute('data-testid');
         if (testId) return '[data-testid="' + escapeValue(testId) + '"]';
         if (tagName === 'button' || tagName === 'a' || element.getAttribute('role') === 'button' || looksLikeHoverMenuTrigger(element)) {
@@ -225,7 +266,6 @@ function selectorBuilderScript() {
           const optionText = normalizeText(element.innerText || element.textContent || element.getAttribute('aria-label') || '');
           if (optionText) return textSelector('option', optionText);
         }
-        const stableId = element.getAttribute('id');
         if (stableId && isStableId(stableId) && (element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox')) {
           return '#' + CSS.escape(stableId);
         }
@@ -254,8 +294,6 @@ function selectorBuilderScript() {
           const ariaLabel = normalizeText(element.getAttribute('aria-label'));
           if (ariaLabel) return textSelector('label', ariaLabel);
         }
-        const id = element.getAttribute('id');
-        if (isStableId(id)) return '#' + CSS.escape(id);
         const ariaLabel = element.getAttribute('aria-label');
         if (ariaLabel) return element.tagName.toLowerCase() + '[aria-label="' + escapeValue(ariaLabel) + '"]';
         const name = element.getAttribute('name');
@@ -288,6 +326,37 @@ function selectorBuilderScript() {
           element.getAttribute('aria-expanded') === 'true' ||
           element.getAttribute('aria-expanded') === 'false'
         );
+      }
+      function isFormFieldElement(element) {
+        if (!element || !element.tagName) return false;
+        const tagName = element.tagName.toLowerCase();
+        return (
+          tagName === 'input' ||
+          tagName === 'textarea' ||
+          tagName === 'select' ||
+          looksLikeSelectTrigger(element)
+        );
+      }
+      function hasStableFieldIdentity(element) {
+        if (!element || !element.getAttribute) return false;
+        const stableId = element.getAttribute('id');
+        if (stableId && isStableId(stableId)) return true;
+        return Boolean(
+          element.getAttribute('data-testid') ||
+          normalizeText(element.getAttribute('aria-label')) ||
+          normalizeText(element.getAttribute('name')) ||
+          normalizeText(element.getAttribute('placeholder'))
+        );
+      }
+      function resolveRecordedFieldElement(element) {
+        if (element && isFormFieldElement(element) && hasStableFieldIdentity(element)) {
+          return element;
+        }
+        const lastFieldTarget = toElement(window.__dashboardRecorderLastFieldTarget);
+        if (lastFieldTarget && isFormFieldElement(lastFieldTarget) && hasStableFieldIdentity(lastFieldTarget)) {
+          return lastFieldTarget;
+        }
+        return element;
       }
       function looksLikeOptionElement(element) {
         if (!element || !element.getAttribute) return false;
@@ -390,12 +459,14 @@ function selectorBuilderScript() {
             return '';
           }
         })();
+        const recordedElement = type === 'change' ? resolveRecordedFieldElement(element) : element;
         return {
           type,
-          selector: safeSemanticSelector(element),
+          selector: safeSemanticSelector(recordedElement),
           label,
           inputType,
           value,
+          screenKey: resolveScreenKey(recordedElement),
           url: location.href,
           timestamp: Date.now(),
           ...extra,
@@ -412,6 +483,7 @@ function selectorBuilderScript() {
       window.__dashboardRecorderInstalled = true;
       window.__dashboardRecorderEvents = Array.isArray(window.__dashboardRecorderEvents) ? window.__dashboardRecorderEvents : [];
       window.__dashboardRecorderLastPointerTarget = null;
+      window.__dashboardRecorderLastFieldTarget = null;
       window.__dashboardRecorderPendingSelect = null;
       window.__dashboardRecorderPendingHover = null;
       window.__dashboardRecorderLastHoverSelector = '';
@@ -424,9 +496,11 @@ function selectorBuilderScript() {
         if (!target || !target.getAttribute) return;
         const id = target.getAttribute('id');
         if (!id || !looksLikeSelectTrigger(target)) return;
+        const triggerSelector = safeSemanticSelector(target);
         clearPendingSelectWatcher();
         window.__dashboardRecorderPendingSelect = {
           id,
+          selector: triggerSelector,
           beforeText: normalizeText(target.innerText || target.textContent || ''),
           emittedValue: '',
           timerId: 0,
@@ -444,11 +518,12 @@ function selectorBuilderScript() {
           if (afterText && afterText !== pending.beforeText && !/^chon /i.test(afterText) && afterText !== pending.emittedValue) {
             pending.emittedValue = afterText;
             pushRecorderEvent({
-              type: 'click',
-              selector: 'kind=option::' + afterText,
+              type: 'change',
+              selector: pending.selector || ('#' + CSS.escape(id)),
               label: afterText,
               inputType: '',
               value: afterText,
+              screenKey: resolveScreenKey(trigger),
               url: location.href,
               timestamp: Date.now(),
             });
@@ -476,11 +551,12 @@ function selectorBuilderScript() {
         if (afterText && afterText !== pending.beforeText && !/^chon /i.test(afterText) && afterText !== pending.emittedValue) {
           pending.emittedValue = afterText;
           pushRecorderEvent({
-            type: 'click',
-            selector: 'kind=option::' + afterText,
+            type: 'change',
+            selector: pending.selector || safeSemanticSelector(trigger),
             label: afterText,
             inputType: '',
             value: afterText,
+            screenKey: resolveScreenKey(trigger),
             url: location.href,
             timestamp: Date.now(),
           });
@@ -496,6 +572,9 @@ function selectorBuilderScript() {
       }
       function queueHover(target) {
         if (!target) return;
+        if (isFormFieldElement(target) || looksLikeSelectTrigger(target)) {
+          return;
+        }
         const selector = safeSemanticSelector(target);
         if (!selector || selector === 'unknown' || selector === 'html > body') return;
         if (window.__dashboardRecorderLastHoverSelector === selector) return;
@@ -536,6 +615,9 @@ function selectorBuilderScript() {
         }
         if (target && target.tagName && !['html', 'body'].includes(target.tagName.toLowerCase())) {
           window.__dashboardRecorderLastPointerTarget = target;
+          if (isFormFieldElement(target)) {
+            window.__dashboardRecorderLastFieldTarget = target;
+          }
           rememberPendingSelect(target);
         }
       }, true);
@@ -578,9 +660,14 @@ function selectorBuilderScript() {
           target = window.__dashboardRecorderLastPointerTarget;
         }
         if (!target) return;
-        pushRecorderEvent(buildEventPayload('click', target));
         if (looksLikeOptionElement(target)) {
           flushPendingSelect();
+          window.__dashboardRecorderLastPointerTarget = null;
+          return;
+        }
+        pushRecorderEvent(buildEventPayload('click', target));
+        if (isFormFieldElement(target)) {
+          window.__dashboardRecorderLastFieldTarget = target;
         }
         window.__dashboardRecorderLastPointerTarget = null;
       }, true);
@@ -589,13 +676,7 @@ function selectorBuilderScript() {
         if (!target) return;
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
           pushRecorderEvent(buildEventPayload('change', target));
-        }
-      }, true);
-      document.addEventListener('input', (event) => {
-        const target = toElement(event.target);
-        if (!target) return;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-          pushRecorderEvent(buildEventPayload('change', target));
+          window.__dashboardRecorderLastFieldTarget = resolveRecordedFieldElement(target);
         }
       }, true);
       window.addEventListener('beforeunload', () => {
@@ -630,25 +711,75 @@ function normalizeRecordedUrl(value) {
     const normalized = String(value || '').trim();
     return normalized && normalized !== 'about:blank' ? normalized : '';
 }
+function normalizeScreenKey(value, fallbackUrl) {
+    const explicit = String(value || '').trim();
+    if (explicit)
+        return explicit;
+    const normalizedUrl = normalizeRecordedUrl(fallbackUrl);
+    if (!normalizedUrl)
+        return 'screen';
+    try {
+        const parsed = new URL(normalizedUrl);
+        const pathKey = parsed.pathname
+            .replace(/^\/+|\/+$/g, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return pathKey || 'home';
+    }
+    catch {
+        return 'screen';
+    }
+}
+function isStableFieldSelector(selector) {
+    const normalized = String(selector || '').trim();
+    if (!normalized)
+        return false;
+    if (normalized.startsWith('kind='))
+        return false;
+    if (/^\[value=/i.test(normalized))
+        return false;
+    return (normalized.startsWith('#') ||
+        /^\[(data-testid|name|aria-label|placeholder)=/i.test(normalized));
+}
 function mapEventsToSteps(events, fallbackUrl) {
     const steps = [];
     let firstUrl = normalizeRecordedUrl(fallbackUrl);
+    let lastFieldSelectorByScreen = new Map();
     if (firstUrl) {
-        steps.push({ action: 'goto', url: firstUrl, description: 'Open recorded page' });
+        steps.push({
+            action: 'goto',
+            url: firstUrl,
+            description: 'Open recorded page',
+            screenKey: normalizeScreenKey(undefined, firstUrl),
+        });
     }
     for (const event of dedupeEvents(events)) {
         const eventUrl = normalizeRecordedUrl(event.url);
+        const screenKey = normalizeScreenKey(event.screenKey, event.url);
         if (!firstUrl && eventUrl) {
             firstUrl = eventUrl;
-            steps.push({ action: 'goto', url: eventUrl, description: 'Open recorded page' });
+            steps.push({
+                action: 'goto',
+                url: eventUrl,
+                description: 'Open recorded page',
+                screenKey,
+            });
         }
         if (event.type === 'change') {
+            const preferredSelector = /^\[value=/i.test(String(event.selector || '').trim()) && lastFieldSelectorByScreen.get(screenKey)
+                ? lastFieldSelectorByScreen.get(screenKey)
+                : event.selector;
             steps.push({
                 action: 'fill',
-                selector: event.selector,
+                selector: preferredSelector,
                 value: event.value || '',
-                description: `Fill ${event.selector}`,
+                description: `Fill ${preferredSelector}`,
+                screenKey,
             });
+            if (isStableFieldSelector(preferredSelector)) {
+                lastFieldSelectorByScreen.set(screenKey, preferredSelector || '');
+            }
             continue;
         }
         if (event.type === 'hover') {
@@ -659,6 +790,7 @@ function mapEventsToSteps(events, fallbackUrl) {
                 action: 'hover',
                 selector: event.selector,
                 description: event.label ? `Hover ${event.label}` : `Hover ${event.selector}`,
+                screenKey,
             });
             continue;
         }
@@ -666,10 +798,14 @@ function mapEventsToSteps(events, fallbackUrl) {
             if (!event.selector || event.selector === 'unknown' || event.selector === 'html > body') {
                 continue;
             }
+            if (isStableFieldSelector(event.selector)) {
+                lastFieldSelectorByScreen.set(screenKey, event.selector);
+            }
             steps.push({
                 action: 'click',
                 selector: event.selector,
                 description: event.label ? `Click ${event.label}` : `Click ${event.selector}`,
+                screenKey,
             });
         }
     }
@@ -752,6 +888,17 @@ async function stopRecording(sessionId) {
     let currentUrl = '';
     let videoAbsolutePath = null;
     try {
+        await session.page
+            .evaluate(() => {
+            const active = document.activeElement;
+            if (active instanceof HTMLInputElement ||
+                active instanceof HTMLTextAreaElement ||
+                active instanceof HTMLSelectElement) {
+                active.dispatchEvent(new Event('change', { bubbles: true }));
+                active.blur();
+            }
+        })
+            .catch(() => undefined);
         await syncSessionEvents(session);
         currentUrl = session.page.url();
         await session.page.close().catch(() => undefined);

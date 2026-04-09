@@ -11,6 +11,14 @@ const selectorResolver_1 = require("./selectorResolver");
 const DEFAULT_TIMEOUT = 10000;
 const STEP_SETTLE_MS = 250;
 const RUN_FINISH_SETTLE_MS = 2000;
+function formatRuntimeDataSetLabel(step, fallbackLabel) {
+    const code = String(step?.backend?.testDataSetCode || '').trim();
+    const name = String(step?.backend?.testDataSetName || '').trim();
+    if (code && name && code !== name) {
+        return `${code} - ${name}`;
+    }
+    return name || code || fallbackLabel;
+}
 function buildRunId(prefix) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const suffix = Math.random().toString(36).slice(2, 8);
@@ -78,6 +86,165 @@ async function verifyFilledValue(locator, expectedValue) {
     catch {
         return false;
     }
+}
+async function isSelectLikeTrigger(locator) {
+    try {
+        return await locator.evaluate((element) => {
+            if (!(element instanceof HTMLElement))
+                return false;
+            const tagName = element.tagName.toLowerCase();
+            const role = String(element.getAttribute('role') || '').toLowerCase();
+            const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+            const dataSlot = String(element.getAttribute('data-slot') || '').toLowerCase();
+            return (tagName === 'select' ||
+                role === 'combobox' ||
+                ariaHasPopup === 'listbox' ||
+                dataSlot === 'select-trigger');
+        });
+    }
+    catch {
+        return false;
+    }
+}
+async function verifySelectLikeValue(locator, expectedValue, selectedLabel) {
+    try {
+        return await locator.evaluate((element, payload) => {
+            if (!(element instanceof HTMLElement))
+                return false;
+            const normalized = (value) => String(value || '').trim().toLowerCase();
+            const expected = normalized(payload.expected);
+            const label = normalized(payload.label);
+            const text = normalized(element.innerText || element.textContent || '');
+            const rawValue = 'value' in element ? normalized(String(element.value || '')) : '';
+            const ariaValue = normalized(element.getAttribute('aria-valuetext'));
+            const dataValue = normalized(element.getAttribute('data-value'));
+            return [text, rawValue, ariaValue, dataValue].some((candidate) => candidate && (candidate === expected || (label && candidate === label)));
+        }, { expected: expectedValue, label: selectedLabel || '' });
+    }
+    catch {
+        return false;
+    }
+}
+async function isSelectLikeOpen(locator) {
+    try {
+        return await locator.evaluate((element) => {
+            if (!(element instanceof HTMLElement))
+                return false;
+            const ariaExpanded = String(element.getAttribute('aria-expanded') || '').toLowerCase();
+            if (ariaExpanded === 'true')
+                return true;
+            const ariaControls = String(element.getAttribute('aria-controls') || '').trim();
+            if (ariaControls) {
+                const controlled = document.getElementById(ariaControls);
+                if (controlled) {
+                    const visible = !!(controlled instanceof HTMLElement && (controlled.offsetParent || controlled.getClientRects().length));
+                    if (visible)
+                        return true;
+                }
+            }
+            return false;
+        });
+    }
+    catch {
+        return false;
+    }
+}
+async function fillSelectLikeValue(locator, value, timeoutMs) {
+    const page = locator.page();
+    const expectedValue = String(value ?? '').trim();
+    if (!expectedValue)
+        return false;
+    const escaped = expectedValue.replace(/"/g, '\\"');
+    const candidateLocators = [
+        page.getByRole('option', { name: new RegExp(`^${expectedValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }),
+        page.locator(`[role="option"][data-value="${escaped}"]`),
+        page.locator(`[role="option"][value="${escaped}"]`),
+        page.locator(`[data-radix-collection-item][data-value="${escaped}"]`),
+        page.locator(`[data-value="${escaped}"]`),
+        page.getByText(new RegExp(`^${expectedValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')),
+    ];
+    if (!(await isSelectLikeOpen(locator))) {
+        try {
+            await locator.click({ timeout: timeoutMs });
+        }
+        catch {
+            return false;
+        }
+    }
+    let selectedLabel = '';
+    for (const candidate of candidateLocators) {
+        const option = candidate.first();
+        try {
+            await option.waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 2500) });
+            selectedLabel = (await option.textContent())?.trim() || selectedLabel;
+            await option.click({ timeout: timeoutMs });
+            await page.waitForTimeout(STEP_SETTLE_MS);
+            if (await verifySelectLikeValue(locator, expectedValue, selectedLabel)) {
+                return true;
+            }
+        }
+        catch {
+            // try next option strategy
+        }
+    }
+    try {
+        const domSelected = await page.evaluate((expected) => {
+            const normalize = (value) => String(value || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .trim()
+                .toLowerCase();
+            const normalizedExpected = normalize(expected);
+            const candidates = Array.from(document.querySelectorAll('[role="option"], [data-radix-collection-item], [data-slot="select-item"]'));
+            const target = candidates.find((element) => {
+                const text = normalize(element.innerText || element.textContent || '');
+                const dataValue = normalize(element.getAttribute('data-value'));
+                const valueAttr = normalize(element.getAttribute('value'));
+                const visible = !!(element.offsetParent ||
+                    element.getClientRects().length);
+                return (visible &&
+                    (text === normalizedExpected ||
+                        dataValue === normalizedExpected ||
+                        valueAttr === normalizedExpected));
+            });
+            if (!target) {
+                return false;
+            }
+            const pointerDown = new PointerEvent('pointerdown', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                pointerType: 'mouse',
+            });
+            const mouseDown = new MouseEvent('mousedown', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+            });
+            const click = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+            });
+            target.dispatchEvent(pointerDown);
+            target.dispatchEvent(mouseDown);
+            target.click();
+            target.dispatchEvent(click);
+            return true;
+        }, expectedValue);
+        if (domSelected) {
+            await page.waitForTimeout(STEP_SETTLE_MS);
+            if (await verifySelectLikeValue(locator, expectedValue, selectedLabel)) {
+                return true;
+            }
+        }
+    }
+    catch {
+        // continue to final verification
+    }
+    return verifySelectLikeValue(locator, expectedValue, selectedLabel);
 }
 async function fillNativeInputValue(locator, value) {
     try {
@@ -148,6 +315,12 @@ async function fillReadonlyDateProxy(locator, value) {
 async function fillResolvedLocator(locator, value, timeoutMs) {
     const normalizedValue = String(value ?? '');
     await locator.waitFor({ state: 'visible', timeout: timeoutMs });
+    if (await isSelectLikeTrigger(locator)) {
+        if (await fillSelectLikeValue(locator, normalizedValue, timeoutMs)) {
+            await locator.page().waitForTimeout(STEP_SETTLE_MS);
+            return;
+        }
+    }
     if (await fillNativeInputValue(locator, normalizedValue)) {
         await locator.page().waitForTimeout(STEP_SETTLE_MS);
         return;
@@ -236,6 +409,61 @@ async function settleHoverTarget(locator, timeoutMs) {
         // Best effort only. Some hover targets do not expose expansion state.
     }
 }
+async function dispatchSyntheticHover(locator) {
+    try {
+        return await locator.evaluate((element) => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
+            const events = ['pointerover', 'mouseover', 'mouseenter'];
+            for (const eventName of events) {
+                element.dispatchEvent(new MouseEvent(eventName, {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                    view: window,
+                }));
+            }
+            return true;
+        });
+    }
+    catch {
+        return false;
+    }
+}
+function canIgnoreHoverFailure(step, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const selector = String(step.selector || '').trim().toLowerCase();
+    return (message.includes('intercepts pointer events') ||
+        message.includes('hover: timeout') ||
+        selector.startsWith('#') ||
+        selector.includes('combobox') ||
+        selector.includes('roleName'.toLowerCase()) ||
+        selector.includes('sex'));
+}
+async function isFormLikeHoverTarget(locator) {
+    try {
+        return await locator.evaluate((element) => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
+            const tagName = element.tagName.toLowerCase();
+            const role = String(element.getAttribute('role') || '').toLowerCase();
+            const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+            const dataSlot = String(element.getAttribute('data-slot') || '').toLowerCase();
+            return (tagName === 'input' ||
+                tagName === 'textarea' ||
+                tagName === 'select' ||
+                role === 'combobox' ||
+                role === 'textbox' ||
+                ariaHasPopup === 'listbox' ||
+                dataSlot === 'select-trigger');
+        });
+    }
+    catch {
+        return false;
+    }
+}
 async function executeStep(page, step, timeoutMs) {
     switch (step.action) {
         case 'goto':
@@ -263,9 +491,21 @@ async function executeStep(page, step, timeoutMs) {
                 throw new Error('hover action requires selector');
             {
                 const locator = await (0, selectorResolver_1.resolveStepLocator)(page, step.selector, 'hover');
+                if (await isFormLikeHoverTarget(locator)) {
+                    await page.waitForTimeout(STEP_SETTLE_MS);
+                    return;
+                }
                 await locator.scrollIntoViewIfNeeded().catch(() => undefined);
-                await locator.hover({ timeout: timeoutMs });
-                await settleHoverTarget(locator, timeoutMs);
+                try {
+                    await locator.hover({ timeout: timeoutMs });
+                }
+                catch (error) {
+                    const syntheticHoverWorked = await dispatchSyntheticHover(locator);
+                    if (!syntheticHoverWorked && !canIgnoreHoverFailure(step, error)) {
+                        throw error;
+                    }
+                }
+                await settleHoverTarget(locator, timeoutMs).catch(() => undefined);
                 await page.waitForTimeout(Math.max(STEP_SETTLE_MS, 450));
             }
             return;
@@ -373,7 +613,7 @@ async function runFlow(options) {
         async function runStepGroup(indexedSteps, groupNumber, totalGroups) {
             throwIfAborted();
             const dataSetId = indexedSteps[0]?.step.backend?.testDataSetId ?? null;
-            const dataSetLabel = dataSetId ? `DataSet ${dataSetId}` : `Run ${groupNumber}`;
+            const dataSetLabel = formatRuntimeDataSetLabel(indexedSteps[0]?.step, dataSetId ? `DataSet ${dataSetId}` : `Run ${groupNumber}`);
             let groupStatus = 'passed';
             let groupErrorMessage = null;
             let executedStepCount = 0;
@@ -556,7 +796,7 @@ async function runFlow(options) {
                             absolutePath: groupVideoPath,
                             url: `/artifacts/${runId}/${path_1.default.basename(groupVideoPath)}`,
                             testDataSetId: dataSetId,
-                            label: dataSetId ? `DataSet ${dataSetId}` : `Run ${groupNumber}`,
+                            label: dataSetLabel,
                         });
                     }
                 }

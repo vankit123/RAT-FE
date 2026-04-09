@@ -1,27 +1,32 @@
-import { LoginTemplateInput, Project, TestCase, TestCaseRequest } from '../types';
+import { InitialTestCaseSetInput, LoginTemplateInput, Project, TestCase, TestCaseRequest } from '../types';
 import { attachTestCaseDataSet, createTestCase, createTestCaseStep, createTestDataSet } from './testCaseService';
 
-function formatSelector(kind: LoginTemplateInput['successSelectorKind'], value: string): string {
+function formatExpectedSelector(kind: LoginTemplateInput['successSelectorKind'], value: string): string {
   const trimmedValue = value.trim();
-  return kind === 'auto' ? trimmedValue : `kind=${kind}::${trimmedValue}`;
-}
-
-function isLikelyUrlOrPath(value: string): boolean {
-  const trimmedValue = value.trim();
-  return /^https?:\/\//i.test(trimmedValue) || trimmedValue.startsWith('/');
+  if (kind === 'selector') return trimmedValue;
+  if (kind === 'button') return `kind=button::${trimmedValue}`;
+  if (kind === 'text') return `kind=text::${trimmedValue}`;
+  return trimmedValue;
 }
 
 export async function createLoginFunctionalTest(
   project: Project,
   testCasePayload: Omit<TestCaseRequest, 'projectId' | 'type' | 'status'>,
-  input: LoginTemplateInput
+  input: LoginTemplateInput,
+  initialDataSet: InitialTestCaseSetInput,
 ): Promise<TestCase> {
   const rawSuccessTarget = input.successSelector.trim();
-  const submitTarget = formatSelector(input.submitSelectorKind, input.submitSelector);
-  const successUrl = String(input.successUrl || '').trim()
-    || (input.successSelectorKind === 'link' && isLikelyUrlOrPath(rawSuccessTarget) ? rawSuccessTarget : '');
-  const shouldAssertVisible = Boolean(rawSuccessTarget) && !(input.successSelectorKind === 'link' && isLikelyUrlOrPath(rawSuccessTarget));
-  const successTarget = shouldAssertVisible ? formatSelector(input.successSelectorKind, rawSuccessTarget) : '';
+  const submitTarget =
+    input.submitSelectorKind === 'auto'
+      ? input.submitSelector.trim()
+      : `kind=${input.submitSelectorKind}::${input.submitSelector.trim()}`;
+  const successUrl =
+    input.successSelectorKind === 'url' ? rawSuccessTarget : '';
+  const shouldAssertVisible =
+    Boolean(rawSuccessTarget) && input.successSelectorKind !== 'url';
+  const successTarget = shouldAssertVisible
+    ? formatExpectedSelector(input.successSelectorKind, rawSuccessTarget)
+    : '';
   const testCase = await createTestCase({
     ...testCasePayload,
     projectId: project.id,
@@ -90,9 +95,9 @@ export async function createLoginFunctionalTest(
 
   const testDataSet = await createTestDataSet({
     projectId: project.id,
-    code: `${testCase.code}`,
-    name: `${testCase.name} `,
-    description:  `${testCase.description} `,
+    code: initialDataSet.code.trim(),
+    name: initialDataSet.name.trim(),
+    description: initialDataSet.description.trim() || `Dữ liệu kiểm thử cho ${testCase.name}`,
     dataJson: {
       validUser: {
         username: input.username,

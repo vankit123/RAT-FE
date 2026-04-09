@@ -94,11 +94,16 @@ export type LoginTemplateInput = {
   passwordSelector: string;
   submitSelectorKind: 'auto' | 'text' | 'button' | 'link' | 'label' | 'placeholder' | 'css';
   submitSelector: string;
-  successSelectorKind: 'auto' | 'text' | 'button' | 'link' | 'label' | 'placeholder' | 'css';
+  successSelectorKind: 'url' | 'text' | 'button' | 'selector';
   successSelector: string;
-  successUrl?: string;
   username: string;
   password: string;
+};
+
+export type InitialTestCaseSetInput = {
+  code: string;
+  name: string;
+  description: string;
 };
 
 export type FlowStep = {
@@ -107,6 +112,7 @@ export type FlowStep = {
   selector?: string;
   url?: string;
   value?: string;
+  screenKey?: string;
 };
 
 export type RunResult = {

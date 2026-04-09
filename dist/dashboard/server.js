@@ -206,7 +206,7 @@ async function saveBackendRunResult(flow, result, baseUrl) {
         for (const item of executedItems) {
             const stepResult = item.result;
             const backendStep = item.step.backend;
-            if (!backendStep)
+            if (!backendStep || backendStep.testCaseStepId <= 0)
                 continue;
             await postBackendJson('/test-run-steps', {
                 testRunCaseId: testRunCase.id,

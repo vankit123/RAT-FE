@@ -56,6 +56,12 @@ type TestRunDetailResponse = {
   cases?: TestRunCaseDetailResponse[] | null;
 };
 
+type TestDataSetListItem = {
+  id: number;
+  code?: string | null;
+  name?: string | null;
+};
+
 function normalizeRunStatus(status?: string | null): 'passed' | 'failed' {
   return String(status || '').toLowerCase() === 'passed' ? 'passed' : 'failed';
 }
@@ -64,20 +70,37 @@ function dataSetLabel(testDataSetId: number | null | undefined, index: number): 
   return testDataSetId ? `DataSet ${testDataSetId}` : `DataSet ${index + 1}`;
 }
 
+function formatDataSetLabelFromMeta(dataSet?: TestDataSetListItem | null, fallback?: string): string {
+  const code = String(dataSet?.code || '').trim();
+  const name = String(dataSet?.name || '').trim();
+  if (code && name && code !== name) {
+    return `${code} - ${name}`;
+  }
+  return code || name || fallback || 'Test case set';
+}
+
 export async function getLatestProjectRunResult(projectId: number): Promise<RunResult | null> {
-  const detail = await getBackendJson<TestRunDetailResponse>(BACKEND_ENDPOINTS.latestProjectRunDetail(projectId)).catch((error) => {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-    if (message.includes('not found') || message.includes('404')) {
-      return null;
-    }
-    throw error;
-  });
+  const [detail, allDataSets] = await Promise.all([
+    getBackendJson<TestRunDetailResponse>(BACKEND_ENDPOINTS.latestProjectRunDetail(projectId)).catch((error) => {
+      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (message.includes('not found') || message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }),
+    getBackendJson<TestDataSetListItem[]>(BACKEND_ENDPOINTS.testDataSets).catch(() => []),
+  ]);
 
   if (!detail) return null;
 
+  const dataSetMetaById = new Map(allDataSets.map((item) => [item.id, item]));
+
   const cases = detail.cases || [];
   const steps = cases.flatMap((runCase, caseIndex) => {
-    const label = dataSetLabel(runCase.testDataSetId, caseIndex);
+    const label = formatDataSetLabelFromMeta(
+      runCase.testDataSetId ? dataSetMetaById.get(runCase.testDataSetId) || null : null,
+      dataSetLabel(runCase.testDataSetId, caseIndex),
+    );
     return (runCase.steps || []).map((step) => ({
       name: `Step ${step.stepOrder}: ${step.actionType}${step.target ? ` ${step.target}` : ''}`,
       status: normalizeRunStatus(step.status),
@@ -92,7 +115,10 @@ export async function getLatestProjectRunResult(projectId: number): Promise<RunR
     const failedStepCount = caseSteps.filter((step) => normalizeRunStatus(step.status) === 'failed').length;
     return {
       testDataSetId: runCase.testDataSetId ?? null,
-      label: dataSetLabel(runCase.testDataSetId, index),
+      label: formatDataSetLabelFromMeta(
+        runCase.testDataSetId ? dataSetMetaById.get(runCase.testDataSetId) || null : null,
+        dataSetLabel(runCase.testDataSetId, index),
+      ),
       status: normalizeRunStatus(runCase.status),
       durationMs: runCase.durationMs || 0,
       stepCount: caseSteps.length,

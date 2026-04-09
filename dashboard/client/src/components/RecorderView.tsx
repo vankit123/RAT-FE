@@ -1,16 +1,17 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { FlowStep, RecordingStopResult, StatusTone, TestCaseRequest } from '../types';
 import { getRecordingSnapshotRequest, startRecordingRequest, stopRecordingRequest } from '../services/recordingService';
 import { StatusPill } from './StatusPill';
 
 type RecorderViewProps = {
   initialUrl?: string;
+  autoStart?: boolean;
   projectName?: string;
   onSaveAsProjectTestCase?(recording: RecordingStopResult, payload: Omit<TestCaseRequest, 'projectId' | 'status'>): Promise<void>;
   onUseRecordedSteps(code: string): void;
 };
 
-export function RecorderView({ initialUrl, projectName, onSaveAsProjectTestCase, onUseRecordedSteps }: RecorderViewProps) {
+export function RecorderView({ initialUrl, autoStart, projectName, onSaveAsProjectTestCase, onUseRecordedSteps }: RecorderViewProps) {
   const [url, setUrl] = useState(initialUrl || 'http://localhost:5173/signin');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; tone?: StatusTone }>({ text: 'Idle' });
@@ -21,12 +22,25 @@ export function RecorderView({ initialUrl, projectName, onSaveAsProjectTestCase,
   const [stepsTab, setStepsTab] = useState<'steps' | 'json'>('steps');
   const [editableSteps, setEditableSteps] = useState<FlowStep[]>([]);
   const [jsonError, setJsonError] = useState('');
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     if (!sessionId && initialUrl) {
       setUrl(initialUrl);
     }
   }, [initialUrl, sessionId]);
+
+  useEffect(() => {
+    if (!autoStart) {
+      autoStartedRef.current = false;
+      return;
+    }
+    if (autoStartedRef.current || sessionId) {
+      return;
+    }
+    autoStartedRef.current = true;
+    void start();
+  }, [autoStart, sessionId, url]);
 
   useEffect(() => {
     if (!sessionId) return undefined;

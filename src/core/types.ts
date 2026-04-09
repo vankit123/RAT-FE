@@ -36,6 +36,8 @@ export interface Step {
     testCaseStepId: number;
     testCaseId: number;
     testDataSetId?: number;
+    testDataSetCode?: string;
+    testDataSetName?: string;
     stepOrder: number;
     actionType: string;
     target?: string | null;
