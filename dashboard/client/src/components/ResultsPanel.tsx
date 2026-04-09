@@ -1,41 +1,92 @@
-import { useState } from 'react';
-import { RunProgressState, RunResult } from '../types';
-import { StatusPill } from './StatusPill';
+import { useEffect, useMemo, useState } from "react";
+import { RunProgressState, RunResultEntry } from "../types";
+import { StatusPill } from "./StatusPill";
 
 type ResultsPanelProps = {
-  result: RunResult | null;
+  results: RunResultEntry[];
   runningLabel?: string;
   progress?: RunProgressState | null;
 };
 
-export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelProps) {
-  const [expanded, setExpanded] = useState(true);
-  const videos = result?.artifacts?.videos?.length
-    ? result.artifacts.videos
-    : result?.artifacts?.video
-      ? [result.artifacts.video]
-      : [];
-  const stepsForDataSet = (testDataSetId: number | null, label: string) => {
-    if (!result) {
-      return [];
-    }
+function formatResultLabel(entry: RunResultEntry): string {
+  const code = String(entry.testCaseCode || "").trim();
+  const name = String(entry.testCaseName || entry.result.flowName || "").trim();
+  if (code && name && code !== name) {
+    return `${code} - ${name}`;
+  }
+  return code || name || entry.result.flowName || `Run ${entry.result.runId}`;
+}
 
-    const matchingSteps = result.steps.filter((step) => {
+export function ResultsPanel({
+  results,
+  runningLabel,
+  progress,
+}: ResultsPanelProps) {
+  const [expanded, setExpanded] = useState(true);
+  const [activeTab, setActiveTab] = useState(0);
+
+  useEffect(() => {
+    setActiveTab((current) =>
+      results.length ? Math.min(current, results.length - 1) : 0,
+    );
+  }, [results]);
+
+  const selectedEntry = results[activeTab] || null;
+  const selectedResult = selectedEntry?.result || null;
+  const videos = selectedResult?.artifacts?.videos?.length
+    ? selectedResult.artifacts.videos
+    : selectedResult?.artifacts?.video
+      ? [selectedResult.artifacts.video]
+      : [];
+
+  const summary = useMemo(() => {
+    const passedCases = results.filter(
+      (entry) => entry.result.status === "passed",
+    ).length;
+    const failedCases = results.filter(
+      (entry) => entry.result.status === "failed",
+    ).length;
+    const allDataSets = results.flatMap((entry) => entry.result.dataSets || []);
+    const passedSets = allDataSets.filter((item) => item.status === "passed").length;
+    const failedSets = allDataSets.filter((item) => item.status === "failed").length;
+    const totalDurationMs = results.reduce(
+      (sum, entry) => sum + (entry.result.durationMs || 0),
+      0,
+    );
+
+    return {
+      passedCases,
+      failedCases,
+      passedSets,
+      failedSets,
+      totalDurationMs,
+      totalCases: results.length,
+      totalSets: allDataSets.length,
+    };
+  }, [results]);
+
+  const stepsForDataSet = (testDataSetId: number | null, label: string) => {
+    if (!selectedResult) return [];
+
+    const matchingSteps = selectedResult.steps.filter((step) => {
       if (step.testDataSetId !== testDataSetId) {
         return false;
       }
-
       return testDataSetId !== null || !label || step.dataSetLabel === label;
     });
 
-    return matchingSteps.length || result.dataSets?.length !== 1 ? matchingSteps : result.steps;
+    return matchingSteps.length || selectedResult.dataSets?.length !== 1
+      ? matchingSteps
+      : selectedResult.steps;
   };
 
   return (
     <section className="rounded-[28px] border border-white/70 bg-white/90 p-6 shadow-2xl shadow-blue-900/10 backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="mb-2 text-xs uppercase tracking-[0.18em] text-blue-700">Execution</p>
+          <p className="mb-2 text-xs uppercase tracking-[0.18em] text-blue-700">
+            Execution
+          </p>
           <h2 className="text-3xl font-black tracking-tight">Latest Result</h2>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -44,214 +95,395 @@ export function ResultsPanel({ result, runningLabel, progress }: ResultsPanelPro
             onClick={() => setExpanded((value) => !value)}
             type="button"
           >
-            {expanded ? 'Thu gọn' : 'Mở rộng'}
+            {expanded ? "Thu gọn" : "Mở rộng"}
           </button>
-          <StatusPill tone={result ? result.status : runningLabel ? 'running' : undefined}>
-            {result ? (result.status === 'passed' ? 'Passed' : 'Failed') : runningLabel || 'Waiting'}
+          <StatusPill
+            tone={
+              selectedResult ? selectedResult.status : runningLabel ? "running" : undefined
+            }
+          >
+            {selectedResult
+              ? selectedResult.status === "passed"
+                ? "Passed"
+                : "Failed"
+              : runningLabel || "Waiting"}
           </StatusPill>
         </div>
       </div>
 
-      {expanded ? (result ? (
-        <>
-          {progress?.running ? (
-            <div className="mt-5 rounded-3xl border border-blue-200 bg-blue-50/80 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">Running now</p>
-                  <h3 className="mt-1 text-xl font-black text-slate-900">{progress.testCaseName || progress.flowName || 'Test case'}</h3>
+      {expanded ? (
+        selectedResult ? (
+          <>
+            {progress?.running ? (
+              <div className="mt-5 rounded-3xl border border-blue-200 bg-blue-50/80 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">
+                      Running now
+                    </p>
+                    <h3 className="mt-1 text-xl font-black text-slate-900">
+                      {progress.testCaseName || progress.flowName || "Test case"}
+                    </h3>
+                  </div>
+                  <div className="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white">
+                    Loading
+                  </div>
                 </div>
-                <div className="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white">Loading</div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
+                    <span className="text-sm text-slate-500">
+                      Test case set hiện tại
+                    </span>
+                    <strong className="mt-2 block">
+                      {progress.currentDataSetLabel || "Đang chuẩn bị"}
+                      {` (${progress.currentDataSetIndex}/${progress.totalDataSets})`}
+                    </strong>
+                  </div>
+                  <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
+                    <span className="text-sm text-slate-500">Step hiện tại</span>
+                    <strong className="mt-2 block break-words">
+                      {progress.currentStepName || "Đang load steps"}
+                      {progress.currentStepIndex && progress.totalSteps
+                        ? ` (${progress.currentStepIndex}/${progress.totalSteps})`
+                        : ""}
+                    </strong>
+                  </div>
+                  <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
+                    <span className="text-sm text-slate-500">Tiến độ</span>
+                    <strong className="mt-2 block">
+                      {progress.completedSteps} step xong, {progress.failedSteps} lỗi
+                    </strong>
+                  </div>
+                </div>
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-blue-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-600 to-sky-400 transition-all"
+                    style={{
+                      width:
+                        progress.totalSteps && progress.currentStepIndex
+                          ? `${Math.max(
+                              8,
+                              Math.min(
+                                100,
+                                (progress.currentStepIndex / progress.totalSteps) *
+                                  100,
+                              ),
+                            )}%`
+                          : "12%",
+                    }}
+                  />
+                </div>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-                  <span className="text-sm text-slate-500">Test case set hiện tại</span>
-                  <strong className="mt-2 block">
-                    {progress.currentDataSetLabel || 'Đang chuẩn bị'}
-                    {` (${progress.currentDataSetIndex}/${progress.totalDataSets})` }
-                  </strong>
-                </div>
-                <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-                  <span className="text-sm text-slate-500">Step hiện tại</span>
-                  <strong className="mt-2 block break-words">
-                    {progress.currentStepName || 'Đang load steps'}
-                    {progress.currentStepIndex && progress.totalSteps ? ` (${progress.currentStepIndex}/${progress.totalSteps})` : ''}
-                  </strong>
-                </div>
-                <div className="rounded-2xl border border-blue-100 bg-white/80 p-4">
-                  <span className="text-sm text-slate-500">Tiến độ</span>
-                  <strong className="mt-2 block">{progress.completedSteps} step xong, {progress.failedSteps} lỗi</strong>
-                </div>
+            ) : null}
+
+            <div className="mt-5 grid gap-3 md:grid-cols-5">
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <span className="text-sm text-slate-500">Test case passed</span>
+                <strong className="mt-2 block text-2xl text-emerald-700">
+                  {summary.passedCases}/{summary.totalCases}
+                </strong>
               </div>
-              {progress.currentStepName?.toLowerCase().includes('vnpay') ? (
-                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/90 p-4 text-sm text-amber-900">
-                  Đang ở bước thanh toán VNPAY sandbox. Hãy hoàn tất thanh toán thủ công trên browser đang mở; sau khi quay lại hệ thống, flow sẽ tự chạy tiếp và đánh giá điều kiện pass.
-                </div>
-              ) : null}
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-blue-100">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-blue-600 to-sky-400 transition-all"
-                  style={{
-                    width: progress.totalSteps && progress.currentStepIndex
-                      ? `${Math.max(8, Math.min(100, (progress.currentStepIndex / progress.totalSteps) * 100))}%`
-                      : '12%',
-                  }}
-                />
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <span className="text-sm text-slate-500">Test case failed</span>
+                <strong className="mt-2 block text-2xl text-rose-700">
+                  {summary.failedCases}/{summary.totalCases}
+                </strong>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <span className="text-sm text-slate-500">Test case set passed</span>
+                <strong className="mt-2 block text-2xl text-emerald-700">
+                  {summary.passedSets}/{summary.totalSets || 0}
+                </strong>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <span className="text-sm text-slate-500">Test case set failed</span>
+                <strong className="mt-2 block text-2xl text-rose-700">
+                  {summary.failedSets}/{summary.totalSets || 0}
+                </strong>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <span className="text-sm text-slate-500">Tổng thời gian chạy</span>
+                <strong className="mt-2 block text-2xl text-slate-900">
+                  {summary.totalDurationMs} ms
+                </strong>
               </div>
             </div>
-          ) : null}
-          <div className="mt-5 grid gap-3 md:grid-cols-4">
-            {[
-              ['Status', result.status],
-              ['Flow', result.flowName || '-'],
-              ['Duration', `${result.durationMs} ms`],
-              ['Current URL', result.currentUrl || '-'],
-            ].map(([label, value]) => (
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4" key={label}>
-                <span className="text-sm text-slate-500">{label}</span>
-                <strong className="mt-2 block break-words">{value}</strong>
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-slate-600">
-            Run ID: {result.runId}
-            <br />
-            {result.errorMessage ? `Error: ${result.errorMessage}` : 'Flow completed without runtime errors.'}
-          </p>
-          {result.dataSets?.length ? (
+
             <div className="mt-5 rounded-2xl border border-slate-200 bg-white/80 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">Test Case Set Results</p>
-                  <h4 className="mt-1 text-lg font-black text-slate-900">Kết quả theo từng test case set</h4>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">
+                    Test Case Tabs
+                  </p>
+                  <h4 className="mt-1 text-lg font-black text-slate-900">
+                    Mỗi test case là một tab
+                  </h4>
                 </div>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-600">
-                  {result.dataSets.length} test case set
+                  {results.length} test case
                 </span>
               </div>
-              <div className="mt-4 grid gap-4">
-                {result.dataSets.map((dataSet, index) => {
-                  const dataSetSteps = stepsForDataSet(dataSet.testDataSetId, dataSet.label);
-
-                  return (
-                    <div
-                      className={`rounded-2xl border bg-white/90 p-4 ${
-                        dataSet.status === 'passed'
-                          ? 'border-l-4 border-l-emerald-600'
-                          : 'border-l-4 border-l-rose-600'
-                      }`}
-                      key={`${dataSet.testDataSetId ?? 'run'}-${dataSet.label}-${index}`}
-                    >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <strong className="block text-slate-900">
-                          {dataSet.label}
-                        </strong>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Đã chạy {dataSet.executedStepCount}/{dataSet.stepCount} step trong {dataSet.durationMs} ms
-                        </p>
-                      </div>
-                      <StatusPill tone={dataSet.status}>{dataSet.status === 'passed' ? 'Passed' : 'Failed'}</StatusPill>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {results.map((entry, index) => (
+                  <button
+                    key={`${entry.result.runId}-${index}`}
+                    type="button"
+                    onClick={() => setActiveTab(index)}
+                    className={`rounded-2xl border px-4 py-3 text-left transition ${
+                      index === activeTab
+                        ? "border-sky-300 bg-sky-50 shadow-sm"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <strong className="text-sm text-slate-900">
+                        {formatResultLabel(entry)}
+                      </strong>
+                      <StatusPill tone={entry.result.status}>
+                        {entry.result.status === "passed" ? "Passed" : "Failed"}
+                      </StatusPill>
                     </div>
-                    {dataSet.failedStepCount ? (
-                      <p className="mt-3 text-sm font-semibold text-rose-700">{dataSet.failedStepCount} step lỗi</p>
-                    ) : (
-                      <p className="mt-3 text-sm font-semibold text-emerald-700">Tất cả step đã pass</p>
-                    )}
-                    {dataSet.errorMessage ? <p className="mt-2 break-words text-sm text-rose-700">{dataSet.errorMessage}</p> : null}
-                    <div className="mt-4 grid gap-2">
-                      {dataSetSteps.length ? (
-                        dataSetSteps.map((step, stepIndex) => (
-                          <div
-                            className={`rounded-xl border bg-slate-50/80 p-3 ${
-                              step.status === 'passed' ? 'border-l-4 border-l-emerald-500' : 'border-l-4 border-l-rose-500'
-                            }`}
-                            key={`${dataSet.label}-${step.name}-${stepIndex}`}
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-2">
-                              <strong className="break-words text-sm text-slate-900">{step.name}</strong>
-                              <span className={step.status === 'passed' ? 'text-sm font-bold text-emerald-700' : 'text-sm font-bold text-rose-700'}>
-                                {step.status}
-                              </span>
-                            </div>
-                            <p className="mt-1 text-sm text-slate-500">{step.durationMs} ms</p>
-                            {step.error ? <p className="mt-2 break-words text-sm text-rose-700">{step.error}</p> : null}
-                          </div>
-                        ))
-                      ) : (
-                        <div className="rounded-xl border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-                          Không có step nào được ghi nhận cho test case set này.
-                        </div>
-                      )}
-                    </div>
-                    </div>
-                  );
-                })}
+                    <p className="mt-2 text-xs text-slate-500">
+                      {entry.result.dataSets?.filter((item) => item.status === "passed").length || 0}
+                      {" / "}
+                      {entry.result.dataSets?.length || 0} set passed
+                    </p>
+                  </button>
+                ))}
               </div>
             </div>
-          ) : null}
-          {!result.dataSets?.length ? (
-            <div className="mt-5 grid gap-3">
-              {result.steps.length ? (
-                result.steps.map((step, index) => (
-                  <div className={`rounded-2xl border bg-white/80 p-4 ${step.status === 'passed' ? 'border-l-4 border-l-emerald-600' : 'border-l-4 border-l-rose-600'}`} key={`${step.name}-${index}`}>
-                    <strong>{step.name}</strong>
-                    <p className="text-sm text-slate-500">{step.status} in {step.durationMs} ms</p>
-                    {step.error ? <p className="mt-2 text-rose-700">{step.error}</p> : null}
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Không có step nào được ghi nhận.</div>
-              )}
+
+            <div className="mt-5 grid gap-3 md:grid-cols-4">
+              {[
+                ["Test case", formatResultLabel(selectedEntry)],
+                ["Status", selectedResult.status],
+                ["Duration", `${selectedResult.durationMs} ms`],
+                ["Current URL", selectedResult.currentUrl || "-"],
+              ].map(([label, value]) => (
+                <div
+                  className="rounded-2xl border border-slate-200 bg-white/80 p-4"
+                  key={label}
+                >
+                  <span className="text-sm text-slate-500">{label}</span>
+                  <strong className="mt-2 block break-words">{value}</strong>
+                </div>
+              ))}
             </div>
-          ) : null}
-          <div className="mt-5 grid gap-4">
-            {videos.length ? (
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
-                <h4 className="mb-3 font-bold">{videos.length > 1 ? 'Execution Videos' : 'Execution Video'}</h4>
-                <div className="grid gap-4">
-                  {videos.map((video, index) => (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3" key={`${video.url}-${index}`}>
-                      <p className="mb-2 text-sm font-semibold text-slate-700">
-                        {video.label }
-                      </p>
-                      <video className="w-full rounded-2xl border border-slate-200" controls src={video.url}></video>
-                    </div>
-                  ))}
+
+            <p className="mt-4 text-slate-600">
+              Run ID: {selectedResult.runId}
+              <br />
+              {selectedResult.errorMessage
+                ? `Error: ${selectedResult.errorMessage}`
+                : "Flow completed without runtime errors."}
+            </p>
+
+            {selectedResult.dataSets?.length ? (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-white/80 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">
+                      Test Case Set Results
+                    </p>
+                    <h4 className="mt-1 text-lg font-black text-slate-900">
+                      Set nào pass, set nào failed
+                    </h4>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-sm font-semibold">
+                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+                      Passed:{" "}
+                      {
+                        selectedResult.dataSets.filter(
+                          (item) => item.status === "passed",
+                        ).length
+                      }
+                    </span>
+                    <span className="rounded-full bg-rose-50 px-3 py-1 text-rose-700">
+                      Failed:{" "}
+                      {
+                        selectedResult.dataSets.filter(
+                          (item) => item.status === "failed",
+                        ).length
+                      }
+                    </span>
+                  </div>
+                </div>
+                {selectedResult.dataSets.some((item) => item.status === "failed") ? (
+                  <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50/80 p-4">
+                    <p className="text-sm font-bold text-rose-800">
+                      Test case set failed:
+                    </p>
+                    <p className="mt-2 text-sm text-rose-700">
+                      {selectedResult.dataSets
+                        .filter((item) => item.status === "failed")
+                        .map((item) => item.label)
+                        .join(", ")}
+                    </p>
+                  </div>
+                ) : null}
+                <div className="mt-4 grid gap-4">
+                  {selectedResult.dataSets.map((dataSet, index) => {
+                    const dataSetSteps = stepsForDataSet(
+                      dataSet.testDataSetId,
+                      dataSet.label,
+                    );
+
+                    return (
+                      <div
+                        className={`rounded-2xl border bg-white/90 p-4 ${
+                          dataSet.status === "passed"
+                            ? "border-l-4 border-l-emerald-600"
+                            : "border-l-4 border-l-rose-600"
+                        }`}
+                        key={`${dataSet.testDataSetId ?? "run"}-${dataSet.label}-${index}`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <strong className="block text-slate-900">
+                              {dataSet.label}
+                            </strong>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Đã chạy {dataSet.executedStepCount}/{dataSet.stepCount} step
+                              trong {dataSet.durationMs} ms
+                            </p>
+                          </div>
+                          <StatusPill tone={dataSet.status}>
+                            {dataSet.status === "passed" ? "Passed" : "Failed"}
+                          </StatusPill>
+                        </div>
+                        {dataSet.failedStepCount ? (
+                          <p className="mt-3 text-sm font-semibold text-rose-700">
+                            {dataSet.failedStepCount} step lỗi
+                          </p>
+                        ) : (
+                          <p className="mt-3 text-sm font-semibold text-emerald-700">
+                            Tất cả step đã pass
+                          </p>
+                        )}
+                        {dataSet.errorMessage ? (
+                          <p className="mt-2 break-words text-sm text-rose-700">
+                            {dataSet.errorMessage}
+                          </p>
+                        ) : null}
+                        <div className="mt-4 grid gap-2">
+                          {dataSetSteps.length ? (
+                            dataSetSteps.map((step, stepIndex) => (
+                              <div
+                                className={`rounded-xl border bg-slate-50/80 p-3 ${
+                                  step.status === "passed"
+                                    ? "border-l-4 border-l-emerald-500"
+                                    : "border-l-4 border-l-rose-500"
+                                }`}
+                                key={`${dataSet.label}-${step.name}-${stepIndex}`}
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <strong className="break-words text-sm text-slate-900">
+                                    {step.name}
+                                  </strong>
+                                  <span
+                                    className={
+                                      step.status === "passed"
+                                        ? "text-sm font-bold text-emerald-700"
+                                        : "text-sm font-bold text-rose-700"
+                                    }
+                                  >
+                                    {step.status}
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-sm text-slate-500">
+                                  {step.durationMs} ms
+                                </p>
+                                {step.error ? (
+                                  <p className="mt-2 break-words text-sm text-rose-700">
+                                    {step.error}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-slate-300 p-3 text-sm text-slate-500">
+                              Không có step nào được ghi nhận cho test case set này.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
-            {result.artifacts?.screenshot ? (
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
-                <h4 className="mb-3 font-bold">Failure Screenshot</h4>
-                <img className="w-full rounded-2xl border border-slate-200" src={result.artifacts.screenshot.url} alt="Failure screenshot" />
-              </div>
-            ) : null}
-          </div>
-        </>
-      ) : (
-        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">
-          {progress?.running ? (
-            <div>
-              <strong className="text-slate-800">{progress.testCaseName || 'Test case'} đang chạy</strong>
-              <p className="mt-2">
-                Test case set: {progress.currentDataSetLabel || 'Đang chuẩn bị'}
-                {progress.currentDataSetIndex && progress.totalDataSets ? ` (${progress.currentDataSetIndex}/${progress.totalDataSets})` : ''}
-              </p>
-              <p>
-                Step: {progress.currentStepName || 'Đang load steps'}
-                {progress.currentStepIndex && progress.totalSteps ? ` (${progress.currentStepIndex}/${progress.totalSteps})` : ''}
-              </p>
+
+            <div className="mt-5 grid gap-4">
+              {videos.length ? (
+                <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                  <h4 className="mb-3 font-bold">
+                    {videos.length > 1 ? "Execution Videos" : "Execution Video"}
+                  </h4>
+                  <div className="grid gap-4">
+                    {videos.map((video, index) => (
+                      <div
+                        className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3"
+                        key={`${video.url}-${index}`}
+                      >
+                        <p className="mb-2 text-sm font-semibold text-slate-700">
+                          {video.label}
+                        </p>
+                        <video
+                          className="w-full rounded-2xl border border-slate-200"
+                          controls
+                          src={video.url}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {selectedResult.artifacts?.screenshot ? (
+                <div className="rounded-2xl border border-slate-200 bg-white/80 p-4">
+                  <h4 className="mb-3 font-bold">Failure Screenshot</h4>
+                  <img
+                    className="w-full rounded-2xl border border-slate-200"
+                    src={selectedResult.artifacts.screenshot.url}
+                    alt="Failure screenshot"
+                  />
+                </div>
+              ) : null}
             </div>
-          ) : 'Chưa có lần chạy nào.'}
-        </div>
-      )) : (
+          </>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">
+            {progress?.running ? (
+              <div>
+                <strong className="text-slate-800">
+                  {progress.testCaseName || "Test case"} đang chạy
+                </strong>
+                <p className="mt-2">
+                  Test case set: {progress.currentDataSetLabel || "Đang chuẩn bị"}
+                  {progress.currentDataSetIndex && progress.totalDataSets
+                    ? ` (${progress.currentDataSetIndex}/${progress.totalDataSets})`
+                    : ""}
+                </p>
+                <p>
+                  Step: {progress.currentStepName || "Đang load steps"}
+                  {progress.currentStepIndex && progress.totalSteps
+                    ? ` (${progress.currentStepIndex}/${progress.totalSteps})`
+                    : ""}
+                </p>
+              </div>
+            ) : (
+              "Chưa có lần chạy nào."
+            )}
+          </div>
+        )
+      ) : (
         <div className="mt-4 text-sm text-slate-500">
-          {result
-            ? `Run ${result.runId} - ${result.status === 'passed' ? 'Passed' : 'Failed'}`
+          {selectedResult
+            ? `Run ${selectedResult.runId} - ${
+                selectedResult.status === "passed" ? "Passed" : "Failed"
+              }`
             : progress?.running
-              ? `${progress.testCaseName || 'Test case'} đang chạy`
-              : 'Chưa có lần chạy nào.'}
+              ? `${progress.testCaseName || "Test case"} đang chạy`
+              : "Chưa có lần chạy nào."}
         </div>
       )}
     </section>

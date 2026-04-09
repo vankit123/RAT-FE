@@ -19,6 +19,7 @@ import {
 } from "./services/testCaseService";
 import { createLoginFunctionalTest } from "./services/functionalTestService";
 import { getLatestProjectRunResult, runBackendTestCaseRequest } from "./services/flowService";
+import { uploadTestAsset } from "./services/testAssetService";
 import { getTemplates } from "./services/templateService";
 import {
   InitialTestCaseSetInput,
@@ -29,6 +30,7 @@ import {
   RunProgressEvent,
   RunProgressState,
   RunResult,
+  RunResultEntry,
   TemplateSummary,
   TestCase,
   TestCaseDataSet,
@@ -49,15 +51,45 @@ import { Sidebar } from "./components/Sidebar";
 const LATEST_RESULT_STORAGE_KEY = "rat.latestRunResult";
 const VNPAY_SANDBOX_PATTERN = /sandbox\.vnpayment\.vn\/paymentv2/i;
 
-function loadStoredLatestResult(): RunResult | null {
+function toRunResultEntry(
+  result: RunResult,
+  meta?: {
+    testCaseId?: number | null;
+    testCaseCode?: string;
+    testCaseName?: string;
+  },
+): RunResultEntry {
+  return {
+    testCaseId: meta?.testCaseId ?? result.testCaseId ?? null,
+    testCaseCode: meta?.testCaseCode || "",
+    testCaseName: meta?.testCaseName || result.flowName || "Test case",
+    result,
+  };
+}
+
+function loadStoredLatestResults(): RunResultEntry[] {
   try {
     const rawResult = window.localStorage.getItem(LATEST_RESULT_STORAGE_KEY);
-    if (!rawResult) return null;
+    if (!rawResult) return [];
 
-    const parsed = JSON.parse(rawResult) as RunResult;
-    return parsed && parsed.runId && parsed.status && Array.isArray(parsed.steps) ? parsed : null;
+    const parsed = JSON.parse(rawResult) as RunResultEntry[] | RunResult;
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          item.result &&
+          item.result.runId &&
+          item.result.status &&
+          Array.isArray(item.result.steps),
+      );
+    }
+
+    return parsed && parsed.runId && parsed.status && Array.isArray(parsed.steps)
+      ? [toRunResultEntry(parsed)]
+      : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -150,6 +182,18 @@ function deriveRecordedInputKey(step: RecordingStopResult["steps"][number], inde
   return slugifyInputKey(labelMatch?.[1] || source);
 }
 
+async function dataUrlToFile(
+  dataUrl: string,
+  fileName: string,
+  mimeType: string,
+): Promise<File> {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], fileName, {
+    type: mimeType || blob.type || "application/octet-stream",
+  });
+}
+
 function isStableRecordedFieldSelector(selector: string | undefined): boolean {
   const normalized = String(selector || "").trim();
   if (!normalized) return false;
@@ -218,6 +262,43 @@ function buildRecordedInputData(
   return grouped;
 }
 
+async function buildRecordedFileAssetData(
+  projectId: number,
+  recording: RecordingStopResult,
+): Promise<Record<string, Record<string, { assetId: number; fileName: string; mimeType: string }>>> {
+  const grouped: Record<
+    string,
+    Record<string, { assetId: number; fileName: string; mimeType: string }>
+  > = {};
+
+  for (const uploadedFile of recording.uploadedFiles || []) {
+    if (!uploadedFile.dataUrl) {
+      continue;
+    }
+
+    const file = await dataUrlToFile(
+      uploadedFile.dataUrl,
+      uploadedFile.fileName,
+      uploadedFile.mimeType,
+    );
+    const uploadedAsset = await uploadTestAsset(projectId, file);
+    const screenKey =
+      String(uploadedFile.screenKey || "")
+        .trim()
+        .replace(/[^a-zA-Z0-9_]+/g, "_") || "screen";
+    if (!grouped[screenKey]) {
+      grouped[screenKey] = {};
+    }
+    grouped[screenKey][uploadedFile.inputKey] = {
+      assetId: uploadedAsset.id,
+      fileName: uploadedAsset.originalName || uploadedFile.fileName,
+      mimeType: uploadedAsset.mimeType || uploadedFile.mimeType,
+    };
+  }
+
+  return grouped;
+}
+
 export function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
@@ -244,7 +325,7 @@ export function App() {
   const [stageMeta, setStageMeta] = useState(
     "Tạo dự án mới hoặc chọn dự án đã lưu trong sidebar",
   );
-  const [latestResult, setLatestResult] = useState<RunResult | null>(null);
+  const [latestResults, setLatestResults] = useState<RunResultEntry[]>([]);
   const [runningLabel, setRunningLabel] = useState<string | undefined>();
   const [runProgress, setRunProgress] = useState<RunProgressState | null>(null);
   const [runningTestCaseId, setRunningTestCaseId] = useState<number | null>(null);
@@ -277,7 +358,7 @@ export function App() {
   );
 
   useEffect(() => {
-    setLatestResult(loadStoredLatestResult());
+    setLatestResults(loadStoredLatestResults());
     void Promise.all([refreshProjects(), refreshTemplates()]).catch((error) => {
       setStageMeta(
         `Không thể load dữ liệu dashboard: ${error instanceof Error ? error.message : String(error)}`,
@@ -290,13 +371,89 @@ export function App() {
     void loadLatestProjectRun(selectedProjectId);
   }, [selectedProjectId]);
 
-  function rememberLatestResult(result: RunResult) {
-    setLatestResult(result);
-    try {
-      window.localStorage.setItem(LATEST_RESULT_STORAGE_KEY, JSON.stringify(result));
-    } catch {
-      // The run result should still be visible in memory even if browser storage is unavailable.
-    }
+  useEffect(() => {
+    if (!selectedProjectTestCases.length) return;
+
+    setLatestResults((current) => {
+      let changed = false;
+      const nextResults = current.map((entry) => {
+        const testCaseId = entry.testCaseId ?? entry.result.testCaseId ?? null;
+        if (!testCaseId) {
+          return entry;
+        }
+
+        const matchedTestCase = selectedProjectTestCases.find(
+          (item) => item.id === testCaseId,
+        );
+        if (!matchedTestCase) {
+          return entry;
+        }
+
+        const nextCode = matchedTestCase.code || "";
+        const nextName = matchedTestCase.name || entry.testCaseName || "";
+        if (
+          entry.testCaseId === testCaseId &&
+          entry.testCaseCode === nextCode &&
+          entry.testCaseName === nextName
+        ) {
+          return entry;
+        }
+
+        changed = true;
+        return {
+          ...entry,
+          testCaseId,
+          testCaseCode: nextCode,
+          testCaseName: nextName,
+        };
+      });
+
+      if (!changed) {
+        return current;
+      }
+
+      try {
+        window.localStorage.setItem(
+          LATEST_RESULT_STORAGE_KEY,
+          JSON.stringify(nextResults),
+        );
+      } catch {
+        // Browser storage is optional.
+      }
+
+      return nextResults;
+    });
+  }, [selectedProjectTestCases]);
+
+  function rememberLatestResult(
+    result: RunResult,
+    meta?: {
+      testCaseId?: number | null;
+      testCaseCode?: string;
+      testCaseName?: string;
+      append?: boolean;
+    },
+  ) {
+    const nextEntry = toRunResultEntry(result, meta);
+    setLatestResults((current) => {
+      const nextResults = meta?.append
+        ? [
+            ...current.filter(
+              (item) => item.testCaseId !== nextEntry.testCaseId,
+            ),
+            nextEntry,
+          ]
+        : [nextEntry];
+      try {
+        window.localStorage.setItem(
+          LATEST_RESULT_STORAGE_KEY,
+          JSON.stringify(nextResults),
+        );
+      } catch {
+        // The run result should still be visible in memory even if browser storage is unavailable.
+      }
+      return nextResults;
+    });
   }
 
   async function refreshProjects() {
@@ -314,10 +471,26 @@ export function App() {
   async function loadLatestProjectRun(projectId: number) {
     try {
       const result = await getLatestProjectRunResult(projectId);
-      setLatestResult(result);
+      const matchedTestCase =
+        result?.testCaseId != null
+          ? testCases.find((item) => item.id === result.testCaseId) || null
+          : null;
+      const nextResults = result
+        ? [
+            toRunResultEntry(result, {
+              testCaseId: matchedTestCase?.id ?? result.testCaseId ?? null,
+              testCaseCode: matchedTestCase?.code || "",
+              testCaseName: matchedTestCase?.name || result.flowName || "Test case",
+            }),
+          ]
+        : [];
+      setLatestResults(nextResults);
       if (result) {
         try {
-          window.localStorage.setItem(LATEST_RESULT_STORAGE_KEY, JSON.stringify(result));
+          window.localStorage.setItem(
+            LATEST_RESULT_STORAGE_KEY,
+            JSON.stringify(nextResults),
+          );
         } catch {
           // Browser storage is optional; the BE response is already in state.
         }
@@ -329,7 +502,7 @@ export function App() {
         }
       }
     } catch (error) {
-      setLatestResult(null);
+      setLatestResults([]);
       setStageMeta(
         `Không thể load lần chạy gần nhất của dự án: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -542,10 +715,23 @@ export function App() {
       const sanitizedRecordedSteps = buildRuntimeRecordedSteps(recording);
       const hasVnpayInRecording = recordingTouchesVnpay(recording);
       const recordedInputs = buildRecordedInputData(sanitizedRecordedSteps);
+      const recordedFileAssets = await buildRecordedFileAssetData(
+        selectedProject.id,
+        recording,
+      );
+      const combinedInputs = Object.entries(recordedFileAssets).reduce<
+        Record<string, Record<string, unknown>>
+      >((accumulator, [screenKey, assetFields]) => {
+        accumulator[screenKey] = {
+          ...(recordedInputs[screenKey] || {}),
+          ...assetFields,
+        };
+        return accumulator;
+      }, { ...recordedInputs });
       const recordedData = {
-        ...(Object.keys(recordedInputs).length
+        ...(Object.keys(combinedInputs).length
           ? {
-              inputs: recordedInputs,
+              inputs: combinedInputs,
             }
           : {}),
         recorded: Object.fromEntries(
@@ -598,14 +784,29 @@ export function App() {
       await Promise.all(
         sanitizedRecordedSteps.map((step, index) => {
           const stepKey = `recorded.step${index + 1}`;
+          const normalizedScreenKey =
+            String(step.screenKey || "")
+              .trim()
+              .replace(/[^a-zA-Z0-9_]+/g, "_") || "screen";
+          const uploadValuePlaceholder =
+            step.action === "upload"
+              ? `\${inputs.${normalizedScreenKey}.${deriveRecordedInputKey(step, index)}.assetId}`
+              : null;
           return createTestCaseStep({
             testCaseId: testCase.id,
             stepOrder: index + 1,
             actionType: step.action,
-            target: step.action === "payViaVnpay" ? null : `\${${stepKey}.target}`,
+            target:
+              step.action === "payViaVnpay"
+                ? null
+                : step.action === "upload"
+                  ? (step.selector || null)
+                  : `\${${stepKey}.target}`,
             value:
               step.action === "goto" || step.action === "payViaVnpay"
                 ? null
+                : step.action === "upload"
+                  ? uploadValuePlaceholder
                 : `\${${stepKey}.value}`,
             expectedValue: null,
             description: step.description || `${step.action} ${step.selector || step.url || ""}`.trim(),
@@ -661,7 +862,12 @@ export function App() {
         (event) => handleRunProgressEvent(event, testCase),
         abortController.signal,
       );
-      rememberLatestResult(result);
+      rememberLatestResult(result, {
+        testCaseId: testCase.id,
+        testCaseCode: testCase.code,
+        testCaseName: testCase.name,
+        append: Boolean(queueMeta),
+      });
       setRunningLabel(undefined);
       runAbortControllerRef.current = null;
       setRunningTestCaseId(null);
@@ -697,6 +903,7 @@ export function App() {
 
   async function handleRunTestCase(testCase: TestCase) {
     stopQueuedRunsRef.current = false;
+    setLatestResults([]);
     await executeTestCaseRun(testCase);
   }
 
@@ -704,6 +911,7 @@ export function App() {
     if (!testCasesToRun.length || runningTestCaseId !== null || runQueueActiveRef.current) return;
     stopQueuedRunsRef.current = false;
     runQueueActiveRef.current = true;
+    setLatestResults([]);
     setStageMeta(`Chuẩn bị chạy ${testCasesToRun.length} test case theo thứ tự.`);
     const failedCaseNames: string[] = [];
     try {
@@ -951,7 +1159,7 @@ export function App() {
             />
           ) : null}
 
-          <ResultsPanel result={latestResult} runningLabel={runningLabel} progress={runProgress} />
+          <ResultsPanel results={latestResults} runningLabel={runningLabel} progress={runProgress} />
         </div>
       </main>
     </div>

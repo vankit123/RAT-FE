@@ -62,6 +62,7 @@ function normalizeAction(step) {
         hover: 'hover',
         click: 'click',
         fill: 'fill',
+        upload: 'upload',
         press: 'press',
         waitfor: 'waitFor',
         assertvisible: 'assertVisible',

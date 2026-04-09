@@ -30,6 +30,13 @@ export function postBackendJson<TResponse>(url: string, payload: unknown): Promi
   });
 }
 
+export function postBackendFormData<TResponse>(url: string, formData: FormData): Promise<TResponse> {
+  return requestJson<TResponse>(backendApiUrl(url), {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 export function putBackendJson<TResponse>(url: string, payload: unknown): Promise<TResponse> {
   return requestJson<TResponse>(backendApiUrl(url), {
     method: 'PUT',

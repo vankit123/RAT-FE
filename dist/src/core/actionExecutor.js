@@ -5,6 +5,7 @@ const assertionExecutor_1 = require("./assertionExecutor");
 const selectorResolver_1 = require("../../dashboard/selectorResolver");
 const assertionActions = new Set(['assertVisible', 'assertText', 'assertUrlContains']);
 const DEFAULT_TIMEOUT = 10000;
+const BACKEND_BASE_URL = (process.env.RAT_BE_BASE_URL || 'http://localhost:8083/api').replace(/\/+$/, '');
 function stepSelector(step) {
     return step.selector ?? step.target;
 }
@@ -230,6 +231,32 @@ async function settleHoverTarget(locator, timeoutMs) {
         // Best effort only. Some hover targets do not expose expansion state.
     }
 }
+function parseDownloadFilename(contentDisposition, fallback) {
+    const utfMatch = /filename\*=UTF-8''([^;]+)/i.exec(String(contentDisposition || ''));
+    if (utfMatch?.[1]) {
+        return decodeURIComponent(utfMatch[1]);
+    }
+    const plainMatch = /filename="([^"]+)"/i.exec(String(contentDisposition || ''));
+    return plainMatch?.[1] || fallback;
+}
+async function setUploadedFileFromAssetId(locator, assetId, timeout) {
+    const normalizedAssetId = String(assetId || '').trim();
+    if (!normalizedAssetId) {
+        throw new Error('upload action requires assetId value');
+    }
+    const response = await fetch(`${BACKEND_BASE_URL}/test-assets/${encodeURIComponent(normalizedAssetId)}/download`);
+    if (!response.ok) {
+        throw new Error(`Cannot download test asset ${normalizedAssetId} (HTTP ${response.status}).`);
+    }
+    const fileBuffer = Buffer.from(await response.arrayBuffer());
+    const fileName = parseDownloadFilename(response.headers.get('content-disposition'), `asset-${normalizedAssetId}`);
+    const mimeType = response.headers.get('content-type') || 'application/octet-stream';
+    await locator.setInputFiles({
+        name: fileName,
+        mimeType,
+        buffer: fileBuffer,
+    }, { timeout });
+}
 async function executeStep(page, step, defaultTimeout = DEFAULT_TIMEOUT) {
     const timeout = step.timeout ?? defaultTimeout;
     if (assertionActions.has(step.action)) {
@@ -302,6 +329,18 @@ async function executeStep(page, step, defaultTimeout = DEFAULT_TIMEOUT) {
                 }
                 throw error;
             }
+            return;
+        }
+        case 'upload': {
+            const selector = stepSelector(step);
+            if (!selector) {
+                throw new Error('upload action requires selector');
+            }
+            if (!step.value) {
+                throw new Error('upload action requires value');
+            }
+            const locator = await (0, selectorResolver_1.resolveStepLocator)(page, selector, 'fill');
+            await setUploadedFileFromAssetId(locator, step.value, timeout);
             return;
         }
         case 'press': {

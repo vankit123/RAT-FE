@@ -110,6 +110,7 @@ function normalizeAction(step: TestCaseStepResponse): Step['action'] {
     hover: 'hover',
     click: 'click',
     fill: 'fill',
+    upload: 'upload',
     press: 'press',
     waitfor: 'waitFor',
     assertvisible: 'assertVisible',

@@ -497,6 +497,32 @@ function selectorBuilderScript(): string {
           Promise.resolve(window.__dashboardRecorderPush(payload)).catch(() => undefined);
         }
       }
+      function readFilesForRecorder(input) {
+        const files = Array.from(input && input.files ? input.files : []);
+        return Promise.all(
+          files.map(
+            (file) =>
+              new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () =>
+                  resolve({
+                    fileName: file.name,
+                    mimeType: file.type || 'application/octet-stream',
+                    sizeBytes: Number(file.size || 0),
+                    dataUrl: typeof reader.result === 'string' ? reader.result : '',
+                  });
+                reader.onerror = () =>
+                  resolve({
+                    fileName: file.name,
+                    mimeType: file.type || 'application/octet-stream',
+                    sizeBytes: Number(file.size || 0),
+                    dataUrl: '',
+                  });
+                reader.readAsDataURL(file);
+              }),
+          ),
+        );
+      }
       if (window.__dashboardRecorderInstalled) return;
       window.__dashboardRecorderInstalled = true;
       window.__dashboardRecorderEvents = Array.isArray(window.__dashboardRecorderEvents) ? window.__dashboardRecorderEvents : [];
@@ -693,6 +719,19 @@ function selectorBuilderScript(): string {
         const target = toElement(event.target);
         if (!target) return;
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+          if (target instanceof HTMLInputElement && target.type === 'file') {
+            void readFilesForRecorder(target).then((files) => {
+              pushRecorderEvent(
+                buildEventPayload('change', target, {
+                  inputType: 'file',
+                  value: files.map((file) => file.fileName).join(', '),
+                  files,
+                }),
+              );
+              window.__dashboardRecorderLastFieldTarget = resolveRecordedFieldElement(target);
+            });
+            return;
+          }
           pushRecorderEvent(buildEventPayload('change', target));
           window.__dashboardRecorderLastFieldTarget = resolveRecordedFieldElement(target);
         }
@@ -756,6 +795,23 @@ function normalizeScreenKey(value: string | undefined, fallbackUrl?: string): st
   }
 }
 
+function deriveRecordedInputKeyFromSelector(selector: string | undefined): string {
+  const source = String(selector || '');
+  const match =
+    /kind=label::([^]+)$/i.exec(source) ||
+    /kind=placeholder::([^]+)$/i.exec(source) ||
+    /kind=text::([^]+)$/i.exec(source) ||
+    /\[name="([^"]+)"\]/i.exec(source) ||
+    /\[placeholder="([^"]+)"\]/i.exec(source) ||
+    /\[aria-label="([^"]+)"\]/i.exec(source) ||
+    /^#(.+)$/i.exec(source);
+
+  return String(match?.[1] || source)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'input';
+}
+
 function isStableFieldSelector(selector: string | undefined): boolean {
   const normalized = String(selector || '').trim();
   if (!normalized) return false;
@@ -795,6 +851,26 @@ function mapEventsToSteps(events: RecorderEvent[], fallbackUrl?: string): FlowSt
     }
 
     if (event.type === 'change') {
+      if (String(event.inputType || '').trim().toLowerCase() === 'file') {
+        const preferredSelector =
+          isStableFieldSelector(event.selector)
+            ? event.selector
+            : lastFieldSelectorByScreen.get(screenKey) || event.selector;
+        if (!preferredSelector) {
+          continue;
+        }
+        steps.push({
+          action: 'upload',
+          selector: preferredSelector,
+          value: event.value || '',
+          description: `Upload ${event.value || preferredSelector}`,
+          screenKey,
+        });
+        if (isStableFieldSelector(preferredSelector)) {
+          lastFieldSelectorByScreen.set(screenKey, preferredSelector);
+        }
+        continue;
+      }
       const preferredSelector =
         /^\[value=/i.test(String(event.selector || '').trim()) && lastFieldSelectorByScreen.get(screenKey)
           ? lastFieldSelectorByScreen.get(screenKey)!
@@ -842,6 +918,58 @@ function mapEventsToSteps(events: RecorderEvent[], fallbackUrl?: string): FlowSt
   }
 
   return steps;
+}
+
+function extractRecordedUploads(events: RecorderEvent[]): Array<{
+  selector: string;
+  screenKey?: string;
+  inputKey: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  dataUrl: string;
+}> {
+  const latestByField = new Map<
+    string,
+    {
+      selector: string;
+      screenKey?: string;
+      inputKey: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      dataUrl: string;
+    }
+  >();
+
+  for (const event of dedupeEvents(events)) {
+    if (
+      event.type !== 'change' ||
+      String(event.inputType || '').trim().toLowerCase() !== 'file' ||
+      !event.files?.length
+    ) {
+      continue;
+    }
+
+    const firstFile = event.files[0];
+    if (!firstFile?.dataUrl) {
+      continue;
+    }
+
+    const screenKey = normalizeScreenKey(event.screenKey, event.url);
+    const selector = String(event.selector || '').trim();
+    latestByField.set(`${screenKey}::${selector}`, {
+      selector,
+      screenKey,
+      inputKey: deriveRecordedInputKeyFromSelector(selector),
+      fileName: firstFile.fileName,
+      mimeType: firstFile.mimeType,
+      sizeBytes: firstFile.sizeBytes,
+      dataUrl: firstFile.dataUrl,
+    });
+  }
+
+  return Array.from(latestByField.values());
 }
 
 export async function getRecordingSnapshot(sessionId: string): Promise<RecordingSnapshot> {
@@ -926,6 +1054,15 @@ export async function stopRecording(sessionId: string): Promise<{
   eventCount: number;
   stepCount: number;
   steps: FlowStep[];
+  uploadedFiles: Array<{
+    selector: string;
+    screenKey?: string;
+    inputKey: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    dataUrl: string;
+  }>;
   code: string;
   artifacts: {
     video: { absolutePath: string; url: string } | null;
@@ -974,6 +1111,7 @@ export async function stopRecording(sessionId: string): Promise<{
     eventCount: session.events.length,
     stepCount: recordedSteps.length,
     steps: recordedSteps,
+    uploadedFiles: extractRecordedUploads(session.events),
     code: JSON.stringify(recordedSteps, null, 2),
     artifacts: {
       video: videoAbsolutePath

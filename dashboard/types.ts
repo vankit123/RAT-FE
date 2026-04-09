@@ -5,6 +5,7 @@ export type StepAction =
   | 'hover'
   | 'click'
   | 'fill'
+  | 'upload'
   | 'press'
   | 'assertVisible'
   | 'assertText'
@@ -183,6 +184,12 @@ export interface RecorderEvent {
   label?: string;
   inputType?: string;
   value?: string;
+  files?: Array<{
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    dataUrl: string;
+  }>;
   screenKey?: string;
   url: string;
   timestamp: number;

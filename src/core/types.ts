@@ -5,6 +5,7 @@ export type ActionType =
   | 'hover'
   | 'click'
   | 'fill'
+  | 'upload'
   | 'press'
   | 'waitFor'
   | 'assertVisible'

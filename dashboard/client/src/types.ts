@@ -117,6 +117,7 @@ export type FlowStep = {
 
 export type RunResult = {
   runId: string;
+  testCaseId?: number | null;
   durationMs: number;
   status: 'passed' | 'failed';
   currentUrl: string;
@@ -145,6 +146,13 @@ export type RunResult = {
     videos?: Array<{ url: string; label?: string; testDataSetId?: number | null }>;
     screenshot?: { url: string } | null;
   };
+};
+
+export type RunResultEntry = {
+  testCaseId?: number | null;
+  testCaseCode?: string;
+  testCaseName?: string;
+  result: RunResult;
 };
 
 export type RunProgressEvent =
@@ -223,6 +231,15 @@ export type RecordingStopResult = {
   eventCount: number;
   stepCount: number;
   steps: FlowStep[];
+  uploadedFiles?: Array<{
+    selector: string;
+    screenKey?: string;
+    inputKey: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    dataUrl: string;
+  }>;
   code: string;
   artifacts: {
     video: { url: string } | null;

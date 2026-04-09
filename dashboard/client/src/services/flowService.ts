@@ -130,6 +130,7 @@ export async function getLatestProjectRunResult(projectId: number): Promise<RunR
 
   return {
     runId: String(detail.id),
+    testCaseId: detail.testCaseId ?? null,
     durationMs: detail.durationMs || 0,
     status: normalizeRunStatus(detail.status),
     currentUrl: '',

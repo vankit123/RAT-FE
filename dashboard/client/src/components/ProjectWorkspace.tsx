@@ -182,6 +182,37 @@ function createEmptyStructureFromTemplate(
   );
 }
 
+function getExcelDataRoot(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const objectValue = value as Record<string, unknown>;
+  const inputsValue = objectValue.inputs;
+  if (
+    inputsValue &&
+    typeof inputsValue === "object" &&
+    !Array.isArray(inputsValue)
+  ) {
+    return inputsValue as Record<string, unknown>;
+  }
+
+  return objectValue;
+}
+
+function hasInputsRoot(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const inputsValue = (value as Record<string, unknown>).inputs;
+  return Boolean(
+    inputsValue &&
+      typeof inputsValue === "object" &&
+      !Array.isArray(inputsValue),
+  );
+}
+
 function flattenObject(
   value: unknown,
   prefix = "",
@@ -213,12 +244,15 @@ function validateDataAgainstTemplate(
   importedData: Record<string, unknown>,
   templateValue: unknown,
 ): string[] {
-  const expectedPaths = flattenPaths(templateValue);
+  const expectedRoot = getExcelDataRoot(templateValue);
+  const importedRoot = getExcelDataRoot(importedData);
+
+  const expectedPaths = flattenPaths(expectedRoot);
   if (!expectedPaths.length) {
     return ["Không tìm thấy test case set mẫu để đối chiếu cấu trúc import."];
   }
 
-  const importedPaths = flattenPaths(importedData);
+  const importedPaths = flattenPaths(importedRoot);
   const missingPaths = expectedPaths.filter(
     (path) => !importedPaths.includes(path),
   );
@@ -298,6 +332,19 @@ function mergeJsonObjects(
   });
 
   return base;
+}
+
+function mergeEditableDataRoot(
+  baseValue: unknown,
+  editableDataRoot: Record<string, unknown>,
+): Record<string, unknown> {
+  if (hasInputsRoot(baseValue)) {
+    return mergeJsonObjects(baseValue, {
+      inputs: editableDataRoot,
+    });
+  }
+
+  return mergeJsonObjects(baseValue, editableDataRoot);
 }
 
 function slugifyInputKey(value: string): string {
@@ -409,7 +456,7 @@ function syncRecordedValuesFromInputs(
 }
 
 function exportDataJsonAsXlsx(dataSet: TestDataSet): void {
-  const rows = flattenObject(dataSet.dataJson);
+  const rows = flattenObject(getExcelDataRoot(dataSet.dataJson));
   const worksheet = XLSX.utils.json_to_sheet(
     rows.length ? rows : [{ path: "", value: "" }],
   );
@@ -440,13 +487,14 @@ function parseXlsxFile(
           {
             header: 1,
             raw: false,
+            defval: "",
           },
         );
 
-        const headerPath = String(rows[0]?.[0] || "")
+        const headerPath = String(rows[0]?.[0] ?? "")
           .trim()
           .toLowerCase();
-        const headerValue = String(rows[0]?.[1] || "")
+        const headerValue = String(rows[0]?.[1] ?? "")
           .trim()
           .toLowerCase();
         if (headerPath !== "path" || headerValue !== "value") {
@@ -460,8 +508,8 @@ function parseXlsxFile(
 
         const parsedRows = rows.slice(1).map((row, index) => ({
           rowNumber: index + 2,
-          path: String(row?.[0] || "").trim(),
-          value: String(row?.[1] || "").trim(),
+          path: String(row?.[0] ?? "").trim(),
+          value: String(row?.[1] ?? ""),
         }));
 
         resolve(parsedRows.filter((row) => row.path));
@@ -479,7 +527,9 @@ function buildDataJsonFromImportedRows(
   rows: Array<{ rowNumber: number; path: string; value: string }>,
   templateValue: unknown,
 ): Record<string, unknown> {
-  const importedDataJson = createEmptyStructureFromTemplate(templateValue);
+  const importedDataJson = createEmptyStructureFromTemplate(
+    getExcelDataRoot(templateValue),
+  );
 
   rows.forEach((row) => {
     assignPathValue(importedDataJson, row.path, row.value);
@@ -492,7 +542,7 @@ function validateImportedRowsAgainstTemplate(
   rows: Array<{ rowNumber: number; path: string; value: string }>,
   templateValue: unknown,
 ): string[] {
-  const expectedPaths = flattenPaths(templateValue);
+  const expectedPaths = flattenPaths(getExcelDataRoot(templateValue));
   if (!expectedPaths.length) {
     return ["Không tìm thấy test case set mẫu để đối chiếu cấu trúc import."];
   }
@@ -596,9 +646,11 @@ function renderEditableJsonUi(
   fieldPrefix: string,
   emptyLabel = "Không có dữ liệu",
 ): JSX.Element {
-  const sourceValue = hasStructuredData(value)
-    ? value
-    : createEmptyStructureFromTemplate(templateValue);
+  const sourceRoot = getExcelDataRoot(value);
+  const templateRoot = getExcelDataRoot(templateValue);
+  const sourceValue = hasStructuredData(sourceRoot)
+    ? sourceRoot
+    : createEmptyStructureFromTemplate(templateRoot);
 
   if (!sourceValue || typeof sourceValue !== "object") {
     return (
@@ -885,6 +937,8 @@ export function ProjectWorkspace({
   const [createDataJsonDrafts, setCreateDataJsonDrafts] = useState<
     Record<number, Record<string, unknown>>
   >({});
+  const [createDataJsonImportedDrafts, setCreateDataJsonImportedDrafts] =
+    useState<Record<number, boolean>>({});
   const [dataJsonModes, setDataJsonModes] = useState<
     Record<number, "json" | "preview">
   >({});
@@ -974,6 +1028,14 @@ export function ProjectWorkspace({
         ? current.filter((id) => id !== testCaseId)
         : [...current, testCaseId],
     );
+  }
+
+  function selectAllTestCases() {
+    setSelectedTestCaseIds(testCases.map((testCase) => testCase.id));
+  }
+
+  function clearSelectedTestCases() {
+    setSelectedTestCaseIds([]);
   }
 
   function toggleExpandedTestCase(testCaseId: number) {
@@ -1135,7 +1197,7 @@ export function ProjectWorkspace({
                 : (dataSet.dataJson as Record<string, unknown>),
             )
           : syncRecordedValuesFromInputs(
-              mergeJsonObjects(
+              mergeEditableDataRoot(
                 dataSet.dataJson,
                 buildDataJsonFromUi(data, `dataUi${dataSet.id}`),
               ),
@@ -1266,8 +1328,16 @@ export function ProjectWorkspace({
               string,
               unknown
             >)
-          : hasNonEmptyFormValueForPrefix(data, `createDataUi${testCase.id}`)
-            ? buildDataJsonFromUi(data, `createDataUi${testCase.id}`)
+          : hasNonEmptyFormValueForPrefix(data, `createDataUi${testCase.id}`) ||
+              createDataJsonImportedDrafts[testCase.id]
+            ? syncRecordedValuesFromInputs(
+                mergeEditableDataRoot(
+                  hasStructuredData(createDataJsonDrafts[testCase.id])
+                    ? createDataJsonDrafts[testCase.id]
+                    : templateDataJson,
+                  buildDataJsonFromUi(data, `createDataUi${testCase.id}`),
+                ),
+              )
             : {};
       const expectedJson =
         activeCreateExpectedMode === "json"
@@ -1306,6 +1376,10 @@ export function ProjectWorkspace({
         },
       );
       setCreatingDataSetForTestCaseId(null);
+      setCreateDataJsonImportedDrafts((current) => ({
+        ...current,
+        [testCase.id]: false,
+      }));
     } catch (error) {
       setEditError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1333,9 +1407,12 @@ export function ProjectWorkspace({
       if (validationErrors.length) {
         throw new Error(validationErrors.join(" "));
       }
-      const importedDataJson = buildDataJsonFromImportedRows(
+      const importedInputs = buildDataJsonFromImportedRows(
         rows,
         templateValue,
+      );
+      const importedDataJson = syncRecordedValuesFromInputs(
+        mergeEditableDataRoot(dataSet.dataJson, importedInputs),
       );
 
       await onUpdateTestCase(
@@ -1385,13 +1462,25 @@ export function ProjectWorkspace({
       if (validationErrors.length) {
         throw new Error(validationErrors.join(" "));
       }
-      const importedDataJson = buildDataJsonFromImportedRows(
+      const importedInputs = buildDataJsonFromImportedRows(
         rows,
         templateValue,
+      );
+      const importedDataJson = syncRecordedValuesFromInputs(
+        mergeEditableDataRoot(
+          hasStructuredData(createDataJsonDrafts[testCaseId])
+            ? createDataJsonDrafts[testCaseId]
+            : templateValue,
+          importedInputs,
+        ),
       );
       setCreateDataJsonDrafts((current) => ({
         ...current,
         [testCaseId]: importedDataJson,
+      }));
+      setCreateDataJsonImportedDrafts((current) => ({
+        ...current,
+        [testCaseId]: true,
       }));
       setCreateDataJsonModes((current) => ({
         ...current,
@@ -1559,6 +1648,22 @@ export function ProjectWorkspace({
               onClick={() => setCreatePanelOpen((current) => !current)}
             >
               {createPanelOpen ? "Đóng tạo mới" : "Tạo test case"}
+            </button>
+            <button
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              disabled={!testCases.length || runningTestCaseId !== null}
+              type="button"
+              onClick={selectAllTestCases}
+            >
+              Chọn tất cả
+            </button>
+            <button
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              disabled={!selectedCases.length || runningTestCaseId !== null}
+              type="button"
+              onClick={clearSelectedTestCases}
+            >
+              Bỏ chọn tất cả
             </button>
 
             <button
@@ -1900,12 +2005,12 @@ export function ProjectWorkspace({
                                             }
                                           >
                                             <div className="grid gap-4 md:grid-cols-2">
-                                              <label className="grid gap-2">
+                                              <label className="grid gap-2 md:col-span-2 lg:col-span-1">
                                                 <span className="text-sm font-medium text-slate-700">
                                                   Mã test case set
                                                 </span>
                                                 <input
-                                                  className="rounded-2xl border border-slate-200 px-4 py-3"
+                                                  className="min-h-[56px] w-full rounded-2xl border border-slate-200 px-4 py-4"
                                                   defaultValue={`${row.testCase.code}_SET_${String(
                                                     row.tcSets.length + 1,
                                                   ).padStart(2, "0")}`}
@@ -2155,11 +2260,17 @@ export function ProjectWorkspace({
                                               <button
                                                 className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700"
                                                 type="button"
-                                                onClick={() =>
+                                                onClick={() => {
                                                   setCreatingDataSetForTestCaseId(
                                                     null,
-                                                  )
-                                                }
+                                                  );
+                                                  setCreateDataJsonImportedDrafts(
+                                                    (current) => ({
+                                                      ...current,
+                                                      [row.testCase.id]: false,
+                                                    }),
+                                                  );
+                                                }}
                                               >
                                                 Hủy
                                               </button>

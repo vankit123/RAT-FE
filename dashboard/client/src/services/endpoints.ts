@@ -4,6 +4,15 @@ export const BACKEND_ENDPOINTS = {
   testCaseSteps: '/test-case-steps',
   testDataSets: '/test-data-sets',
   testCaseDataSets: '/test-case-data-sets',
+  testAssets: {
+    upload: '/test-assets/upload',
+    byId(assetId: number | string): string {
+      return `/test-assets/${encodeURIComponent(assetId)}`;
+    },
+    download(assetId: number | string): string {
+      return `/test-assets/${encodeURIComponent(assetId)}/download`;
+    },
+  },
   latestProjectRunDetail(projectId: number): string {
     return `/test-runs/projects/${encodeURIComponent(projectId)}/latest/detail`;
   },
