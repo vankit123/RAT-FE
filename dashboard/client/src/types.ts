@@ -244,6 +244,19 @@ export type RecordingStopResult = {
   artifacts: {
     video: { url: string } | null;
   };
+  debug?: {
+    recorderState?: Record<string, unknown>;
+    recentEvents?: Array<{
+      type: string;
+      selector: string;
+      label?: string;
+      inputType?: string;
+      value?: string;
+      screenKey?: string;
+      url: string;
+      timestamp: number;
+    }>;
+  };
 };
 
 export type RecordingLiveResult = {
@@ -254,6 +267,7 @@ export type RecordingLiveResult = {
   stepCount: number;
   steps: FlowStep[];
   code: string;
+  debug?: RecordingStopResult['debug'];
 };
 
 export type ViewMode = 'home' | 'project' | 'recorder' | 'custom';

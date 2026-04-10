@@ -41,6 +41,17 @@ async function syncSessionEvents(session: RecordingSession): Promise<void> {
   }
 }
 
+async function getRecorderDebugState(session: RecordingSession): Promise<Record<string, unknown>> {
+  try {
+    return await session.page.evaluate(() => {
+      const debug = (window as typeof window & { __dashboardRecorderDebug?: Record<string, unknown> }).__dashboardRecorderDebug;
+      return debug && typeof debug === 'object' ? debug : {};
+    });
+  } catch {
+    return {};
+  }
+}
+
 export interface RecordingSnapshot {
   sessionId: string;
   createdAt: string;
@@ -49,6 +60,10 @@ export interface RecordingSnapshot {
   stepCount: number;
   steps: FlowStep[];
   code: string;
+  debug?: {
+    recorderState?: Record<string, unknown>;
+    recentEvents?: RecorderEvent[];
+  };
 }
 
 const sessions = new Map<string, RecordingSession>();
@@ -62,11 +77,72 @@ function buildSessionId(): string {
 function selectorBuilderScript(): string {
   return `
     (() => {
+      const SHORT_HOVER_DELAY_MS = 240;
+      const LONG_HOVER_DELAY_MS = 2200;
+      const POLLED_STRONG_HOVER_EMIT_MS = 2500;
       function escapeValue(value) {
         return String(value).replace(/"/g, '\\"');
       }
       function normalizeText(value) {
         return String(value || '').replace(/\\s+/g, ' ').trim();
+      }
+      function setRecorderDebug(patch) {
+        const previous = window.__dashboardRecorderDebug || {};
+        const stickyHoverState = {
+          ...(previous.stickyHoverState || {}),
+        };
+        const stickyKeys = [
+          'resolvedHoverSelector',
+          'resolvedHoverLabel',
+          'expandedHoverSelector',
+          'expandedHoverLabel',
+          'polledHoverSelector',
+          'polledHoverLabel',
+          'pointedHoverSelector',
+          'pointedHoverLabel',
+          'pointedTopSelector',
+          'pointedTopLabel',
+          'overlayBlockerSelector',
+          'overlayBlockerLabel',
+          'hoverRejectCandidates',
+          'polledStableHoverSelector',
+          'polledStableHoverSince',
+          'hoverCandidateSelector',
+          'hoverCandidateLabel',
+          'pendingHoverSelector',
+          'pendingHoverLabel',
+          'lastHoverSelector',
+          'lastHoverLabel',
+          'hoverIgnoredReason',
+          'hoverIgnoredTarget',
+          'hoverEmitSkippedSelector',
+          'hoverEmitSkippedReason',
+          'hoverExpandedSelector',
+          'hoverExpandedAfterSignal',
+        ];
+        for (const key of stickyKeys) {
+          const value = patch[key];
+          if (
+            value !== undefined &&
+            value !== null &&
+            !(typeof value === 'string' && value.trim() === '') &&
+            !(Array.isArray(value) && value.length === 0)
+          ) {
+            stickyHoverState[key] = value;
+          }
+        }
+        window.__dashboardRecorderDebug = {
+          ...previous,
+          ...patch,
+          stickyHoverState,
+          updatedAt: Date.now(),
+        };
+      }
+      function appendRecorderDebugLog(entry) {
+        const previous = window.__dashboardRecorderDebug || {};
+        const currentLog = Array.isArray(previous.hoverDebugLog) ? previous.hoverDebugLog : [];
+        const nextLog = [...currentLog.slice(-11), { ...entry, timestamp: Date.now() }];
+        setRecorderDebug({ hoverDebugLog: nextLog });
       }
       function slugify(value) {
         return String(value || '')
@@ -164,7 +240,15 @@ function selectorBuilderScript(): string {
       function stableAttributeSelector(element) {
         if (!element || !element.getAttribute) return '';
         const exactTarget = element;
+        const recorderHover = normalizeText(exactTarget.getAttribute('data-recorder-hover'));
+        if (recorderHover) return '[data-recorder-hover="' + escapeValue(recorderHover) + '"]';
+        const hoverKey = normalizeText(exactTarget.getAttribute('data-hover'));
+        if (hoverKey) return '[data-hover="' + escapeValue(hoverKey) + '"]';
         const stableId = exactTarget.getAttribute('id');
+        const placeholderKey = normalizeText(exactTarget.getAttribute('data-placeholder-key'));
+        if (placeholderKey) return '[data-placeholder-key="' + escapeValue(placeholderKey) + '"]';
+        const fieldId = normalizeText(exactTarget.getAttribute('data-field-id'));
+        if (fieldId) return '[data-field-id="' + escapeValue(fieldId) + '"]';
         if (stableId && isStableId(stableId)) return '#' + CSS.escape(stableId);
         const nearestTestIdTarget = element.closest ? element.closest('[data-testid]') : null;
         const target = nearestTestIdTarget || exactTarget;
@@ -183,9 +267,23 @@ function selectorBuilderScript(): string {
         if (value) return '[value="' + escapeValue(value) + '"]';
         return '';
       }
+      function isDocxFieldBox(element) {
+        if (!element || !element.getAttribute) return false;
+        const id = String(element.getAttribute('id') || '');
+        const className = String(element.getAttribute('class') || '');
+        return (
+          className.includes('field-box-replacement') ||
+          /^docx-field-box-/i.test(id) ||
+          element.getAttribute('data-placeholder-key') !== null ||
+          element.getAttribute('data-field-id') !== null
+        );
+      }
       function looksLikeHoverMenuTrigger(element) {
         if (!element || !element.getAttribute) return false;
         if (isFormFieldElement(element) || looksLikeSelectTrigger(element)) {
+          return false;
+        }
+        if (isDocxFieldBox(element)) {
           return false;
         }
         const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
@@ -197,23 +295,253 @@ function selectorBuilderScript(): string {
           (element.tagName && element.tagName.toLowerCase() === 'button' && element.closest('[data-slot="navigation-menu"]'))
         );
       }
-      function resolveHoverMenuTrigger(event) {
-        const path = event.composedPath ? event.composedPath() : [];
-        const pointTarget = document.elementFromPoint ? document.elementFromPoint(event.clientX, event.clientY) : null;
-        const nodes = [...(path.length ? path : [event.target]), pointTarget].map(toElement).filter(Boolean);
-        for (const node of nodes) {
-          const element = node;
-          const trigger = element.closest
-            ? element.closest('[data-slot="navigation-menu-trigger"], [role="menuitem"], button[aria-controls], [aria-haspopup="menu"]')
-            : null;
-          if (trigger && looksLikeHoverMenuTrigger(trigger)) {
-            return trigger;
+      function shouldAlwaysRecordHover(element) {
+        if (!element || !element.getAttribute) return false;
+        if (element.getAttribute('data-recorder-hover')) return true;
+        if (element.getAttribute('data-hover') === 'true') return true;
+        if (element.getAttribute('data-hover')) return true;
+        const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+        return (
+          looksLikeHoverMenuTrigger(element) ||
+          ariaHasPopup === 'menu' ||
+          ariaHasPopup === 'true' ||
+          (element.getAttribute('aria-controls') && element.getAttribute('aria-expanded') !== null) ||
+          element.getAttribute('data-slot') === 'navigation-menu-trigger'
+        );
+      }
+      function looksLikeHoverableRegion(element) {
+        if (!element || !element.getAttribute) return false;
+        if (isFormFieldElement(element) || looksLikeSelectTrigger(element) || isDocxFieldBox(element)) {
+          return false;
+        }
+        const tagName = (element.tagName || '').toLowerCase();
+        const text = conciseVisibleText(element);
+        const role = String(element.getAttribute('role') || '').toLowerCase();
+        const className = String(element.getAttribute('class') || '');
+        const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+        const hasExplicitHoverMarker = Boolean(
+          element.getAttribute('data-recorder-hover') ||
+          element.getAttribute('data-hover')
+        );
+        const inNavRegion = Boolean(
+          element.closest &&
+          element.closest('header,nav,aside,[role="navigation"],[class*="sidebar"],[class*="menu"],[class*="header"]')
+        );
+        return (
+          looksLikeHoverMenuTrigger(element) ||
+          hasExplicitHoverMarker ||
+          (inNavRegion && !!text && text.length <= 80 && (
+            tagName === 'a' ||
+            role === 'menuitem' ||
+            role === 'tab' ||
+            ariaHasPopup === 'menu' ||
+            ariaHasPopup === 'true'
+          ))
+        );
+      }
+      function hoverTargetScore(element) {
+        if (!element || !element.getAttribute) return -1;
+        let score = 0;
+        const tagName = (element.tagName || '').toLowerCase();
+        const role = String(element.getAttribute('role') || '').toLowerCase();
+        const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+        const dataSlot = String(element.getAttribute('data-slot') || '').toLowerCase();
+        const inNavRegion = Boolean(
+          element.closest &&
+          element.closest('header,nav,aside,[role="navigation"],[class*="sidebar"],[class*="menu"],[class*="header"]')
+        );
+        if (dataSlot === 'navigation-menu-trigger') score += 1000;
+        if (element.getAttribute('data-recorder-hover') !== null) score += 900;
+        if (element.getAttribute('data-hover') !== null) score += 850;
+        if (role === 'menuitem') score += 700;
+        if (ariaHasPopup === 'menu' || ariaHasPopup === 'true') score += 650;
+        if (element.getAttribute('aria-controls')) score += 600;
+        if (tagName === 'a') score += 300;
+        if (role === 'tab') score += 250;
+        if (inNavRegion) score += 200;
+        const text = conciseVisibleText(element);
+        if (text) score += Math.max(0, 120 - text.length);
+        return score;
+      }
+      function hoveredElementsFromDom() {
+        try {
+          return Array.from(document.querySelectorAll(':hover')).map(toElement).filter(Boolean);
+        } catch {
+          return [];
+        }
+      }
+      function pointerPointTargetsFromDom() {
+        try {
+          const point = window.__dashboardRecorderLastPointerPoint;
+          if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') {
+            return [];
           }
-          if (looksLikeHoverMenuTrigger(element)) {
-            return element;
+          return document.elementsFromPoint
+            ? Array.from(document.elementsFromPoint(point.x, point.y)).map(toElement).filter(Boolean)
+            : [];
+        } catch {
+          return [];
+        }
+      }
+      function pickBestHoverTarget(nodes) {
+        const candidates = [];
+        for (const node of nodes.map(toElement).filter(Boolean)) {
+          const element = node;
+          const tagName = (element.tagName || '').toLowerCase();
+          if (tagName === 'html' || tagName === 'body') {
+            continue;
+          }
+          if (isDocxFieldBox(element)) {
+            return null;
+          }
+          const explicitHoverTarget = element.closest
+            ? element.closest('[data-recorder-hover], [data-hover], [data-testid]')
+            : null;
+          if (explicitHoverTarget && looksLikeHoverableRegion(explicitHoverTarget)) {
+            candidates.push(explicitHoverTarget);
+          }
+          const trigger = element.closest
+            ? element.closest('[data-recorder-hover], [data-hover], [data-testid], [data-slot="navigation-menu-trigger"], [data-slot="navigation-menu-item"], [role="menuitem"], button[aria-controls], [aria-haspopup="menu"], header a, header button, nav a, nav button, aside a, aside button, [role="navigation"] a, [role="navigation"] button, [class*="sidebar"] a, [class*="sidebar"] button, [class*="menu"] a, [class*="menu"] button')
+            : null;
+          if (trigger && looksLikeHoverableRegion(trigger)) {
+            candidates.push(trigger);
+          }
+          if (looksLikeHoverableRegion(element)) {
+            candidates.push(element);
           }
         }
-        return null;
+        const uniqueCandidates = Array.from(new Set(candidates));
+        uniqueCandidates.sort((left, right) => hoverTargetScore(right) - hoverTargetScore(left));
+        return uniqueCandidates[0] || null;
+      }
+      function describeHoverNodes(nodes) {
+        return nodes
+          .map(toElement)
+          .filter(Boolean)
+          .slice(0, 8)
+          .map((element) => ({
+            selector: safeSemanticSelector(element),
+            label: normalizeText(element.innerText || element.textContent || '').slice(0, 60),
+            tagName: (element.tagName || '').toLowerCase(),
+            dataSlot: String(element.getAttribute('data-slot') || ''),
+            role: String(element.getAttribute('role') || ''),
+          }));
+      }
+      function describeHoverCandidates(nodes) {
+        return nodes
+          .map(toElement)
+          .filter(Boolean)
+          .slice(0, 8)
+          .map((element) => ({
+            selector: safeSemanticSelector(element),
+            label: normalizeText(element.innerText || element.textContent || '').slice(0, 60),
+            tagName: (element.tagName || '').toLowerCase(),
+            hoverable: looksLikeHoverableRegion(element),
+            score: hoverTargetScore(element),
+            dataSlot: String(element.getAttribute('data-slot') || ''),
+            role: String(element.getAttribute('role') || ''),
+            pointerEvents: window.getComputedStyle ? window.getComputedStyle(element).pointerEvents : '',
+            zIndex: window.getComputedStyle ? window.getComputedStyle(element).zIndex : '',
+          }));
+      }
+      function inferExpandedHoverTrigger() {
+        const expandedCandidates = Array.from(
+          document.querySelectorAll(
+            '[data-slot="navigation-menu-trigger"][data-state="open"], [data-slot="navigation-menu-trigger"][aria-expanded="true"], [aria-haspopup="menu"][aria-expanded="true"], button[aria-controls][aria-expanded="true"], [role="menuitem"][aria-expanded="true"], [data-state="open"][aria-controls]'
+          )
+        )
+          .map(toElement)
+          .filter(Boolean)
+          .filter((element) => looksLikeHoverableRegion(element))
+          .filter((element) => isElementVisible(element));
+
+        const uniqueCandidates = Array.from(new Set(expandedCandidates));
+        uniqueCandidates.sort((left, right) => hoverTargetScore(right) - hoverTargetScore(left));
+        return uniqueCandidates[0] || null;
+      }
+      function resolveHoverPersistenceRoot(element) {
+        if (!element || !element.closest) return null;
+        return element.closest(
+          '[data-slot="navigation-menu"], [role="navigation"], nav, aside, header, [role="menu"], [role="menubar"], [role="listbox"], [class*="group"], [class*="dropdown"], [class*="popover"], [class*="submenu"], [class*="sidebar"], [class*="menu"]'
+        );
+      }
+      function isElementVisible(element) {
+        if (!element || !element.isConnected) return false;
+        const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+        if (!style) return true;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+          return false;
+        }
+        const rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
+        return Boolean(rect && rect.width >= 1 && rect.height >= 1);
+      }
+      function collectHoverExpansionSignal(target) {
+        const selectors = [
+          '[aria-expanded="true"]',
+          '[data-state="open"]',
+          '[data-open="true"]',
+          '[open]',
+          '[data-expanded="true"]',
+          '[role="menu"]',
+          '[role="listbox"]',
+          '[role="dialog"]',
+          '[role="tooltip"]',
+          '[data-slot="navigation-menu-content"]',
+          '[data-radix-popper-content-wrapper]',
+          '[data-submenu]',
+          '[class*="submenu"]',
+          '[class*="dropdown"]',
+          '[class*="popover"]',
+        ];
+        const targetRoot = resolveHoverPersistenceRoot(target);
+        const expandedSelf = target && target.getAttribute
+          ? [
+              target.getAttribute('aria-expanded'),
+              target.getAttribute('data-state'),
+              target.getAttribute('data-open'),
+              target.getAttribute('data-expanded'),
+              target.getAttribute('open'),
+            ].join('|')
+          : '';
+        const visibleSignals = [];
+        for (const selector of selectors) {
+          const matches = Array.from(document.querySelectorAll(selector))
+            .map(toElement)
+            .filter(Boolean)
+            .filter((element) => isElementVisible(element))
+            .filter((element) => {
+              if (!targetRoot) return true;
+              return belongsToSameHoverCluster(targetRoot, element) || belongsToSameHoverCluster(target, element);
+            })
+            .slice(0, 12)
+            .map((element) => safeSemanticSelector(element) || (element.tagName || '').toLowerCase());
+          if (matches.length) {
+            visibleSignals.push(selector + ':' + matches.join(','));
+          }
+        }
+        return expandedSelf + '::' + visibleSignals.join('||');
+      }
+      function belongsToSameHoverCluster(left, right) {
+        if (!left || !right) return false;
+        if (left === right) return true;
+        if (left.contains && left.contains(right)) return true;
+        if (right.contains && right.contains(left)) return true;
+        const leftRoot = resolveHoverPersistenceRoot(left);
+        const rightRoot = resolveHoverPersistenceRoot(right);
+        return Boolean(leftRoot && rightRoot && leftRoot === rightRoot);
+      }
+      function resolveHoverMenuTrigger(event) {
+        const path = event.composedPath ? event.composedPath() : [];
+        const pointTargets = document.elementsFromPoint ? document.elementsFromPoint(event.clientX, event.clientY) : [];
+        const hovered = hoveredElementsFromDom();
+        const resolved = pickBestHoverTarget([...hovered, ...(path.length ? path : [event.target]), ...pointTargets]);
+        if (resolved) {
+          setRecorderDebug({
+            resolvedHoverSelector: safeSemanticSelector(resolved),
+            resolvedHoverLabel: normalizeText(resolved.innerText || resolved.textContent || '').slice(0, 80),
+          });
+        }
+        return resolved;
       }
       function titleCaseWords(value) {
         return String(value || '')
@@ -241,15 +569,22 @@ function selectorBuilderScript(): string {
         if (!element || !element.tagName) return 'unknown';
         const tagName = element.tagName.toLowerCase();
         const stableId = element.getAttribute('id');
+        if (isDocxFieldBox(element)) {
+          const stableAttribute = stableAttributeSelector(element);
+          if (stableAttribute) return stableAttribute;
+          if (stableId && isStableId(stableId)) return '#' + CSS.escape(stableId);
+          const docxFieldText = conciseVisibleText(element) || normalizeText(element.getAttribute('aria-label') || '');
+          if (docxFieldText) return textSelector('text', docxFieldText);
+        }
         if (stableId && isStableId(stableId)) return '#' + CSS.escape(stableId);
+        const stableAttribute = stableAttributeSelector(element);
+        if (stableAttribute) return stableAttribute;
         const testId = element.getAttribute('data-testid');
         if (testId) return '[data-testid="' + escapeValue(testId) + '"]';
         if (tagName === 'button' || tagName === 'a' || element.getAttribute('role') === 'button' || looksLikeHoverMenuTrigger(element)) {
           const buttonText = conciseVisibleText(element) || normalizeText(element.getAttribute('aria-label') || '');
           if (buttonText) return textSelector(tagName === 'a' ? 'link' : 'button', buttonText);
         }
-        const stableAttribute = stableAttributeSelector(element);
-        if (stableAttribute) return stableAttribute;
         const radixId = element.getAttribute('id');
         const radixContentMatch = radixId ? /^radix-:[^:]+:-(trigger|content)-(.+)$/i.exec(radixId) : null;
         if (radixContentMatch) {
@@ -336,13 +671,19 @@ function selectorBuilderScript(): string {
       }
       function looksLikeSelectTrigger(element) {
         if (!element || !element.getAttribute) return false;
+        const role = String(element.getAttribute('role') || '').toLowerCase();
+        const ariaHasPopup = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+        const dataSlot = String(element.getAttribute('data-slot') || '').toLowerCase();
+        const insideSelect = Boolean(
+          element.closest &&
+          element.closest('[data-slot="select"], [data-slot="select-content"], [role="listbox"], [data-radix-select-content]')
+        );
         return (
-          element.getAttribute('role') === 'combobox' ||
-          element.getAttribute('aria-haspopup') === 'listbox' ||
-          element.getAttribute('data-slot') === 'select-trigger' ||
-          element.getAttribute('data-radix-collection-item') !== null ||
-          element.getAttribute('aria-expanded') === 'true' ||
-          element.getAttribute('aria-expanded') === 'false'
+          role === 'combobox' ||
+          ariaHasPopup === 'listbox' ||
+          dataSlot === 'select-trigger' ||
+          dataSlot === 'select-value' ||
+          (element.getAttribute('data-radix-collection-item') !== null && insideSelect)
         );
       }
       function isFormFieldElement(element) {
@@ -413,12 +754,21 @@ function selectorBuilderScript(): string {
         const pointTarget = document.elementFromPoint ? document.elementFromPoint(event.clientX, event.clientY) : null;
         const nodes = [...(path.length ? path : [event.target]), pointTarget].map(toElement).filter(Boolean);
         const selectors = [
+          '.field-box-replacement',
+          '[data-placeholder-key]',
+          '[data-field-id]',
           '[role="option"]',
           '[role="combobox"]',
           '[aria-haspopup="listbox"]',
           '[data-slot="navigation-menu-trigger"]',
           '[data-slot="navigation-menu-content"] a',
           '[data-slot="navigation-menu-content"] button',
+          'header a',
+          'header button',
+          'nav a',
+          'nav button',
+          'aside a',
+          'aside button',
           '[data-slot="select-trigger"]',
           '[data-radix-collection-item]',
           'button',
@@ -429,6 +779,7 @@ function selectorBuilderScript(): string {
         for (const node of nodes) {
           if (!node || node.nodeType !== Node.ELEMENT_NODE) continue;
           const element = node;
+          if (isDocxFieldBox(element)) return element;
           if (looksLikeOptionElement(element)) return element;
           if (looksLikeSelectTrigger(element)) return element;
           if (element.matches && selectors.some((selector) => element.matches(selector))) return element;
@@ -526,11 +877,130 @@ function selectorBuilderScript(): string {
       if (window.__dashboardRecorderInstalled) return;
       window.__dashboardRecorderInstalled = true;
       window.__dashboardRecorderEvents = Array.isArray(window.__dashboardRecorderEvents) ? window.__dashboardRecorderEvents : [];
+      window.__dashboardRecorderDebug = window.__dashboardRecorderDebug || {};
+      setRecorderDebug({
+        installed: true,
+        hoverPollActive: true,
+      });
+      if (window.__dashboardRecorderHoverPollId) {
+        window.clearInterval(window.__dashboardRecorderHoverPollId);
+      }
+      window.__dashboardRecorderHoverPollId = window.setInterval(() => {
+        const hovered = hoveredElementsFromDom();
+        const pointTargets = pointerPointTargetsFromDom();
+        const target = pickBestHoverTarget([
+          ...pointTargets,
+          ...hovered,
+          window.__dashboardRecorderLastPointerTarget,
+        ]);
+        const expandedTarget = inferExpandedHoverTrigger();
+        setRecorderDebug({
+          hoverPollTickAt: Date.now(),
+          hoveredNodeCount: hovered.length,
+          hoveredNodePreview: describeHoverNodes(hovered),
+          pointedNodeCount: pointTargets.length,
+          pointedNodePreview: describeHoverNodes(pointTargets),
+          pointedTopSelector: pointTargets.length ? safeSemanticSelector(pointTargets[0]) : '',
+          pointedTopLabel: pointTargets.length
+            ? normalizeText(pointTargets[0].innerText || pointTargets[0].textContent || '').slice(0, 80)
+            : '',
+          pointedHoverSelector: pointTargets.length ? safeSemanticSelector(pointTargets[0]) : '',
+          pointedHoverLabel: pointTargets.length
+            ? normalizeText(pointTargets[0].innerText || pointTargets[0].textContent || '').slice(0, 80)
+            : '',
+          hoverRejectCandidates: describeHoverCandidates(pointTargets),
+          expandedHoverSelector: expandedTarget ? safeSemanticSelector(expandedTarget) : '',
+          expandedHoverLabel: expandedTarget ? normalizeText(expandedTarget.innerText || expandedTarget.textContent || '').slice(0, 80) : '',
+        });
+        const pointedTarget = pickBestHoverTarget(pointTargets);
+        setRecorderDebug({
+          overlayBlockerSelector:
+            pointTargets.length && pointedTarget && pointTargets[0] !== pointedTarget
+              ? safeSemanticSelector(pointTargets[0])
+              : '',
+          overlayBlockerLabel:
+            pointTargets.length && pointedTarget && pointTargets[0] !== pointedTarget
+              ? normalizeText(pointTargets[0].innerText || pointTargets[0].textContent || '').slice(0, 80)
+              : '',
+        });
+        const resolvedTarget = target || pointedTarget || expandedTarget;
+        if (!resolvedTarget) {
+          setRecorderDebug({
+            polledHoverSelector: '',
+            polledHoverLabel: '',
+            hoverIgnoredReason: 'hover-poll-no-target',
+          });
+          return;
+        }
+        setRecorderDebug({
+          polledHoverSelector: safeSemanticSelector(resolvedTarget),
+          polledHoverLabel: normalizeText(resolvedTarget.innerText || resolvedTarget.textContent || '').slice(0, 80),
+        });
+        const resolvedSelector = safeSemanticSelector(resolvedTarget);
+        const now = Date.now();
+        const previousPolled = window.__dashboardRecorderPolledHoverCandidate;
+        if (
+          previousPolled &&
+          previousPolled.selector === resolvedSelector &&
+          previousPolled.target === resolvedTarget
+        ) {
+          previousPolled.lastSeenAt = now;
+        } else {
+          window.__dashboardRecorderPolledHoverCandidate = {
+            selector: resolvedSelector,
+            target: resolvedTarget,
+            label: normalizeText(resolvedTarget.innerText || resolvedTarget.textContent || '').slice(0, 80),
+            screenKey: resolveScreenKey(resolvedTarget),
+            since: now,
+            lastSeenAt: now,
+          };
+        }
+        setRecorderDebug({
+          polledStableHoverSelector: window.__dashboardRecorderPolledHoverCandidate.selector,
+          polledStableHoverSince: window.__dashboardRecorderPolledHoverCandidate.since,
+        });
+        if (expandedTarget && shouldAlwaysRecordHover(expandedTarget)) {
+          rememberHoverCandidate(expandedTarget);
+          emitHoverEvent({
+            selector: safeSemanticSelector(expandedTarget),
+            target: expandedTarget,
+            label: normalizeText(expandedTarget.innerText || expandedTarget.textContent || '').slice(0, 80),
+            screenKey: resolveScreenKey(expandedTarget),
+          });
+          return;
+        }
+        if (
+          resolvedSelector &&
+          resolvedSelector !== 'unknown' &&
+          resolvedSelector !== 'html > body' &&
+          looksLikeHoverableRegion(resolvedTarget) &&
+          window.__dashboardRecorderPolledHoverCandidate &&
+          window.__dashboardRecorderPolledHoverCandidate.selector === resolvedSelector &&
+          now - Number(window.__dashboardRecorderPolledHoverCandidate.since || 0) >= POLLED_STRONG_HOVER_EMIT_MS
+        ) {
+          setRecorderDebug({
+            hoverEmitSource: 'stable-polled-hover',
+            hoverEmitStableDurationMs: now - Number(window.__dashboardRecorderPolledHoverCandidate.since || 0),
+          });
+          rememberHoverCandidate(resolvedTarget);
+          emitHoverEvent({
+            selector: resolvedSelector,
+            target: resolvedTarget,
+            label: normalizeText(resolvedTarget.innerText || resolvedTarget.textContent || '').slice(0, 80),
+            screenKey: resolveScreenKey(resolvedTarget),
+          });
+          return;
+        }
+        queueHover(resolvedTarget);
+      }, 150);
       window.__dashboardRecorderLastPointerTarget = null;
+      window.__dashboardRecorderLastPointerPoint = null;
       window.__dashboardRecorderLastFieldTarget = null;
       window.__dashboardRecorderPendingSelect = null;
       window.__dashboardRecorderPendingHover = null;
       window.__dashboardRecorderLastHoverSelector = '';
+      window.__dashboardRecorderLastHoverCandidate = null;
+      window.__dashboardRecorderPolledHoverCandidate = null;
       function clearPendingSelectWatcher() {
         if (window.__dashboardRecorderPendingSelect && window.__dashboardRecorderPendingSelect.timerId) {
           window.clearInterval(window.__dashboardRecorderPendingSelect.timerId);
@@ -609,48 +1079,237 @@ function selectorBuilderScript(): string {
         window.__dashboardRecorderPendingSelect = null;
       }
       function clearPendingHover() {
+        if (window.__dashboardRecorderPendingHover && window.__dashboardRecorderPendingHover.observer) {
+          window.__dashboardRecorderPendingHover.observer.disconnect();
+        }
         if (window.__dashboardRecorderPendingHover && window.__dashboardRecorderPendingHover.timerId) {
           window.clearTimeout(window.__dashboardRecorderPendingHover.timerId);
         }
+        if (window.__dashboardRecorderPendingHover && window.__dashboardRecorderPendingHover.longTimerId) {
+          window.clearTimeout(window.__dashboardRecorderPendingHover.longTimerId);
+        }
+        setRecorderDebug({ pendingHoverSelector: '', pendingHoverLabel: '' });
         window.__dashboardRecorderPendingHover = null;
+      }
+      function shouldKeepExistingHoverTarget(existingTarget, nextTarget) {
+        const current = toElement(existingTarget);
+        const next = toElement(nextTarget);
+        if (!current || !next) return false;
+        if (!belongsToSameHoverCluster(current, next)) return false;
+        const currentStrong =
+          shouldAlwaysRecordHover(current) ||
+          current.getAttribute('data-recorder-hover') !== null ||
+          current.getAttribute('data-hover') !== null;
+        const nextStrong =
+          shouldAlwaysRecordHover(next) ||
+          next.getAttribute('data-recorder-hover') !== null ||
+          next.getAttribute('data-hover') !== null;
+        if (currentStrong && !nextStrong) return true;
+        if (currentStrong && nextStrong && current.contains && current.contains(next)) return true;
+        return false;
+      }
+      function rememberHoverCandidate(target) {
+        if (!target) return;
+        const selector = safeSemanticSelector(target);
+        if (!selector || selector === 'unknown' || selector === 'html > body') return;
+        const existingCandidate = window.__dashboardRecorderLastHoverCandidate;
+        if (existingCandidate && shouldKeepExistingHoverTarget(existingCandidate.target, target)) {
+          setRecorderDebug({
+            hoverIgnoredTarget: selector,
+            hoverIgnoredReason: 'kept-existing-stronger-hover-target',
+          });
+          return;
+        }
+        window.__dashboardRecorderLastHoverCandidate = {
+          selector,
+          target,
+          label: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+          screenKey: resolveScreenKey(target),
+          timestamp: Date.now(),
+        };
+        setRecorderDebug({
+          hoverCandidateSelector: selector,
+          hoverCandidateLabel: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+        });
+      }
+      function emitHoverEvent(candidate) {
+        if (!candidate || !candidate.selector || candidate.selector === window.__dashboardRecorderLastHoverSelector) {
+          setRecorderDebug({
+            hoverEmitSkippedSelector: candidate && candidate.selector ? candidate.selector : '',
+            hoverEmitSkippedReason: !candidate || !candidate.selector ? 'missing-candidate' : 'same-as-last-hover-selector',
+          });
+          appendRecorderDebugLog({
+            stage: 'emit-skip',
+            selector: candidate && candidate.selector ? candidate.selector : '',
+            reason: !candidate || !candidate.selector ? 'missing-candidate' : 'same-as-last-hover-selector',
+          });
+          return false;
+        }
+        const target = toElement(candidate.target);
+        if (!target || !target.isConnected) {
+          setRecorderDebug({
+            hoverEmitSkippedSelector: candidate.selector,
+            hoverEmitSkippedReason: 'target-disconnected',
+          });
+          appendRecorderDebugLog({
+            stage: 'emit-skip',
+            selector: candidate.selector,
+            reason: 'target-disconnected',
+          });
+          return false;
+        }
+        window.__dashboardRecorderLastHoverSelector = candidate.selector;
+        setRecorderDebug({
+          lastHoverSelector: candidate.selector,
+          lastHoverLabel: candidate.label || normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+          hoverEmittedSelector: candidate.selector,
+          hoverEmittedLabel: candidate.label || normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+        });
+        appendRecorderDebugLog({
+          stage: 'emit-success',
+          selector: candidate.selector,
+          label: candidate.label || normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+        });
+        pushRecorderEvent({
+          type: 'hover',
+          selector: candidate.selector,
+          label: candidate.label || normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+          inputType: '',
+          value: '',
+          screenKey: candidate.screenKey || resolveScreenKey(target),
+          url: location.href,
+          timestamp: Date.now(),
+        });
+        return true;
+      }
+      function flushHoverBeforeClick(clickTarget) {
+        const candidate = window.__dashboardRecorderLastHoverCandidate;
+        if (!candidate || !clickTarget) return;
+        const candidateTarget = toElement(candidate.target);
+        if (!candidateTarget) return;
+        if (Date.now() - Number(candidate.timestamp || 0) > 2500) return;
+        if (
+          belongsToSameHoverCluster(candidateTarget, clickTarget) &&
+          candidateTarget !== clickTarget &&
+          !(candidateTarget.contains && candidateTarget.contains(clickTarget))
+        ) {
+          emitHoverEvent(candidate);
+        }
       }
       function queueHover(target) {
         if (!target) return;
         if (isFormFieldElement(target) || looksLikeSelectTrigger(target)) {
+          setRecorderDebug({
+            hoverIgnoredTarget: safeSemanticSelector(target),
+            hoverIgnoredReason: 'form-like-target',
+          });
           return;
         }
         const selector = safeSemanticSelector(target);
-        if (!selector || selector === 'unknown' || selector === 'html > body') return;
+        if (!selector || selector === 'unknown' || selector === 'html > body') {
+          setRecorderDebug({
+            hoverIgnoredTarget: selector || '',
+            hoverIgnoredReason: 'invalid-selector',
+          });
+          return;
+        }
+        rememberHoverCandidate(target);
         if (window.__dashboardRecorderLastHoverSelector === selector) return;
 
         const existing = window.__dashboardRecorderPendingHover;
+        if (existing && shouldKeepExistingHoverTarget(existing.target, target)) {
+          setRecorderDebug({
+            hoverIgnoredTarget: selector,
+            hoverIgnoredReason: 'kept-existing-pending-hover-target',
+          });
+          return;
+        }
         if (existing && existing.selector === selector) {
           return;
         }
 
         clearPendingHover();
+        const beforeSignal = collectHoverExpansionSignal(target);
+        const observer = typeof MutationObserver === 'function'
+          ? new MutationObserver(() => {
+              const pending = window.__dashboardRecorderPendingHover;
+              if (!pending || pending.selector !== selector || !target.isConnected) {
+                return;
+              }
+              const afterSignal = collectHoverExpansionSignal(target);
+              if (afterSignal && afterSignal !== pending.beforeSignal) {
+                setRecorderDebug({
+                  hoverExpandedSelector: selector,
+                  hoverExpandedAfterSignal: afterSignal,
+                });
+                emitHoverEvent({
+                  selector,
+                  target,
+                  label: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+                  screenKey: resolveScreenKey(target),
+                });
+                clearPendingHover();
+              }
+            })
+          : null;
+        if (observer && document.body) {
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['aria-expanded', 'data-state', 'data-open', 'data-expanded', 'open', 'style', 'class', 'hidden'],
+          });
+        }
+        const alwaysRecordHover = shouldAlwaysRecordHover(target);
+        setRecorderDebug({
+          pendingHoverSelector: selector,
+          pendingHoverLabel: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+          pendingHoverAlwaysRecord: alwaysRecordHover,
+          pendingHoverBeforeSignal: beforeSignal,
+        });
         window.__dashboardRecorderPendingHover = {
           selector,
+          target,
+          beforeSignal,
+          observer,
+          alwaysRecordHover,
           timerId: window.setTimeout(() => {
             const pending = window.__dashboardRecorderPendingHover;
             if (!pending || pending.selector !== selector || !target.isConnected) {
               return;
             }
-            window.__dashboardRecorderLastHoverSelector = selector;
-            pushRecorderEvent({
-              type: 'hover',
-              selector,
-              label: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
-              inputType: '',
-              value: '',
-              url: location.href,
-              timestamp: Date.now(),
-            });
-            clearPendingHover();
-          }, 180),
+            if (!pending.alwaysRecordHover) {
+              emitHoverEvent({
+                selector,
+                target,
+                label: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+                screenKey: resolveScreenKey(target),
+              });
+              clearPendingHover();
+            }
+          }, SHORT_HOVER_DELAY_MS),
+          longTimerId: window.setTimeout(() => {
+            const pending = window.__dashboardRecorderPendingHover;
+            if (!pending || pending.selector !== selector || !target.isConnected) {
+              return;
+            }
+            if (pending.alwaysRecordHover) {
+              emitHoverEvent({
+                selector,
+                target,
+                label: normalizeText(target.innerText || target.textContent || '').slice(0, 80),
+                screenKey: resolveScreenKey(target),
+              });
+              clearPendingHover();
+            }
+          }, LONG_HOVER_DELAY_MS),
         };
       }
       document.addEventListener('pointerdown', (event) => {
+        window.__dashboardRecorderLastPointerPoint = {
+          x: event.clientX,
+          y: event.clientY,
+        };
         let target = null;
         try {
           target = resolveInteractiveTarget(event);
@@ -678,19 +1337,67 @@ function selectorBuilderScript(): string {
       document.addEventListener('pointerout', (event) => {
         const pending = window.__dashboardRecorderPendingHover;
         if (!pending) return;
-        const relatedTarget = event.relatedTarget;
+        const relatedTarget = toElement(event.relatedTarget);
         const target = resolveHoverMenuTrigger(event);
         if (!target) {
+          if (pending.target && relatedTarget && belongsToSameHoverCluster(pending.target, relatedTarget)) {
+            return;
+          }
           clearPendingHover();
           return;
         }
-        if (relatedTarget && relatedTarget.nodeType === Node.ELEMENT_NODE && target.contains(relatedTarget)) {
+        if (relatedTarget && belongsToSameHoverCluster(target, relatedTarget)) {
+          return;
+        }
+        clearPendingHover();
+      }, true);
+      document.addEventListener('mouseover', (event) => {
+        let target = null;
+        try {
+          target = resolveHoverMenuTrigger(event);
+        } catch {
+          target = null;
+        }
+        if (!target) return;
+        queueHover(target);
+      }, true);
+      document.addEventListener('mousemove', (event) => {
+        window.__dashboardRecorderLastPointerPoint = {
+          x: event.clientX,
+          y: event.clientY,
+        };
+        let target = null;
+        try {
+          target = resolveHoverMenuTrigger(event);
+        } catch {
+          target = null;
+        }
+        if (!target) return;
+        queueHover(target);
+      }, true);
+      document.addEventListener('mouseout', (event) => {
+        const pending = window.__dashboardRecorderPendingHover;
+        if (!pending) return;
+        const relatedTarget = toElement(event.relatedTarget);
+        let target = null;
+        try {
+          target = resolveHoverMenuTrigger(event);
+        } catch {
+          target = null;
+        }
+        if (!target) {
+          if (pending.target && relatedTarget && belongsToSameHoverCluster(pending.target, relatedTarget)) {
+            return;
+          }
+          clearPendingHover();
+          return;
+        }
+        if (relatedTarget && belongsToSameHoverCluster(target, relatedTarget)) {
           return;
         }
         clearPendingHover();
       }, true);
       document.addEventListener('click', (event) => {
-        clearPendingHover();
         let target = null;
         try {
           target = resolveInteractiveTarget(event);
@@ -704,6 +1411,8 @@ function selectorBuilderScript(): string {
           target = window.__dashboardRecorderLastPointerTarget;
         }
         if (!target) return;
+        flushHoverBeforeClick(target);
+        clearPendingHover();
         if (looksLikeOptionElement(target)) {
           flushPendingSelect();
           window.__dashboardRecorderLastPointerTarget = null;
@@ -980,6 +1689,7 @@ export async function getRecordingSnapshot(sessionId: string): Promise<Recording
 
   await syncSessionEvents(session);
   const steps = mapEventsToSteps(session.events, session.startUrl);
+  const recorderState = await getRecorderDebugState(session);
   return {
     sessionId,
     createdAt: session.createdAt,
@@ -988,6 +1698,10 @@ export async function getRecordingSnapshot(sessionId: string): Promise<Recording
     stepCount: steps.length,
     steps,
     code: JSON.stringify(steps, null, 2),
+    debug: {
+      recorderState,
+      recentEvents: session.events.slice(-12),
+    },
   };
 }
 
@@ -1067,6 +1781,10 @@ export async function stopRecording(sessionId: string): Promise<{
   artifacts: {
     video: { absolutePath: string; url: string } | null;
   };
+  debug?: {
+    recorderState?: Record<string, unknown>;
+    recentEvents?: RecorderEvent[];
+  };
 }> {
   const session = sessions.get(sessionId);
   if (!session) {
@@ -1075,6 +1793,7 @@ export async function stopRecording(sessionId: string): Promise<{
 
   let currentUrl = '';
   let videoAbsolutePath: string | null = null;
+  let recorderState: Record<string, unknown> = {};
 
   try {
     await session.page
@@ -1091,6 +1810,7 @@ export async function stopRecording(sessionId: string): Promise<{
       })
       .catch(() => undefined);
     await syncSessionEvents(session);
+    recorderState = await getRecorderDebugState(session);
     currentUrl = session.page.url();
     await session.page.close().catch(() => undefined);
     try {
@@ -1120,6 +1840,10 @@ export async function stopRecording(sessionId: string): Promise<{
             url: `/artifacts/${sessionId}/${path.basename(videoAbsolutePath)}`,
           }
         : null,
+    },
+    debug: {
+      recorderState,
+      recentEvents: session.events.slice(-20),
     },
   };
 
